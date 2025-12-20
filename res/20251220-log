@@ -1,0 +1,2 @@
+100%|███████████████████████████████████████████████████| 1319/1319 [2:11:23<00:00,  5.98s/it]
+{"method": "latent_mas", "model": "Qwen/Qwen3-4B", "split": "test", "seed": 42, "max_samples": 1319, "accuracy": 0.8756633813495072, "correct": 1155, "total_time_sec": 7893.255, "time_per_sample_sec": 5.9843}
