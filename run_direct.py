@@ -134,6 +134,21 @@ def main_direct():
             gold="18",
             solution="18"
         ),
+        create_question_dict(
+            question="Mary does her grocery shopping on Saturday. She does her shopping only at a specific store where she is allowed a credit of $100, which must be paid in full before her next shopping trip. That week she spent the full credit limit and paid $15 of it on Tuesday and $23 of it on Thursday. How much credit will Mary need to pay before her next shopping trip?",
+            gold="62",
+            solution="62"
+        ),
+        create_question_dict(
+            question="A concert ticket costs $40. Mr. Benson bought 12 tickets and received a 5% discount for every ticket bought that exceeds 10. How much did Mr. Benson pay in all?",
+            gold="476",
+            solution="476"
+        ),
+        create_question_dict(
+            question="On a school trip to the seashore, Alan and his friends collected shells. Alan collected four times as many shells as Ben did. Ben got a late start and only collected a third of what Laurie did. If Laurie collected 36 shells how many did Alan collect?",
+            gold="48",
+            solution="48"
+        ),
         # Add more questions here as needed
         # create_question_dict(
         #     question="Your question here",
@@ -153,7 +168,7 @@ def main_direct():
     # We'll use argparse.Namespace to create an object similar to parsed args
     args_dict = {
         # Core parameters
-        "method": "latent_mas_multipath",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
+        "method": "latent_mas",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
         "model_name": "/root/autodl-fs/models/hub/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
         "max_samples": len(custom_questions),  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
