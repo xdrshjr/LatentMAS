@@ -56,7 +56,7 @@ The latent information might contain irrelevant contents. Ignore it if it is not
 
 You must reason step-by-step to solve the provided Target Question without outputting other irrelevant information.
 
-Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Now, reason step by step and output the final answer inside \\boxed{{ }}.
 """
         
         elif args.task in ["arc_easy", "arc_challenge", "gpqa", 'medqa']:
@@ -70,7 +70,7 @@ The latent information might contain irrelevant contents. Ignore it if it is not
 You must reason step-by-step to solve the provided Target Question without outputting other irrelevant information.
 Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
 
-Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Now, reason step by step and output the final answer inside \\boxed{{ }}.
 """
 
         elif args.task in ["mbppplus", "humanevalplus"]:
@@ -103,7 +103,7 @@ The latent information might contain irrelevant contents. Ignore it if it is not
 You must reason step-by-step to solve the provided Target Question without outputting other irrelevant information.
 Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box.
 
-Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Now, reason step by step and output the final answer inside \\boxed{{ }}.
 """
 
         else: 
@@ -125,7 +125,7 @@ def build_agent_message_hierarchical_latent_mas(role: str, question: str, contex
     if args.task in ['gsm8k', 'aime2024', 'aime2025']:
         if role == "planner":
             user_content = f"""
-You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 
 Input Question: {question}
 
@@ -134,7 +134,7 @@ Your response:
     
         elif role == "critic":
             user_content = f"""
-You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 
 Input Question: {question}     
 
@@ -143,7 +143,7 @@ Your response:
     
         elif role == "refiner":
             user_content = f"""
-You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 
 Input Question: {question}
 
@@ -151,7 +151,7 @@ Your response:
 """
         elif role == "judger":
             user_content = f"""
-You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{ }}.
 
 Input Question: {question}
 
@@ -164,7 +164,7 @@ Your response:
 
             if role == "planner":
                 user_content = f"""
-You are a math agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a math agent. Given the final answer inside \\boxed{{ }}.
 Your final answer must be selected from A,B,C,D. 
 
 Input Question: {question}
@@ -173,7 +173,7 @@ Your response:
 """
             elif role == "critic":
                 user_content = f"""
-You are a science agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a science agent. Given the final answer inside \\boxed{{ }}.
 Your final answer must be selected from A,B,C,D. 
 
 Input Question: {question}     
@@ -182,7 +182,7 @@ Your response:
 """
             elif role == "refiner":
                 user_content = f"""
-You are a code agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a code agent. Given the final answer inside \\boxed{{ }}.
 Your final answer must be selected from A,B,C,D. 
 
 Input Question: {question}
@@ -192,7 +192,7 @@ Your response:
             elif role == "judger":
 
                 user_content = f"""
-You are a task summarizer. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a task summarizer. Given the final answer inside \\boxed{{ }}.
 Your final answer must be selected from A,B,C,D. 
 
 Input Question: {question}
@@ -203,7 +203,7 @@ Your response:
         else:
             if role == "planner":
                 user_content = f"""
-You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
 
 Input Question: {question}
@@ -213,7 +213,7 @@ Your response:
     
             elif role == "critic":
                 user_content = f"""
-You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
 
 Input Question: {question}     
@@ -223,7 +223,7 @@ Your response:
     
             elif role == "refiner":
                 user_content = f"""
-You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
 
 Input Question: {question}
@@ -233,7 +233,7 @@ Your response:
             elif role == "judger":
 
                 user_content = f"""
-You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{ }}.
 Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
 
 Input Question: {question}
@@ -295,7 +295,7 @@ Your response:
     elif args.task in ["winogrande"]:
         if role == "planner":
             user_content = f"""
-You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 "Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
 
 Input Question: {question}
@@ -305,7 +305,7 @@ Your response:
     
         elif role == "critic":
             user_content = f"""
-You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 "Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
 
 Input Question: {question}     
@@ -315,7 +315,7 @@ Your response:
     
         elif role == "refiner":
             user_content = f"""
-You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 "Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
 
 Input Question: {question}
@@ -324,7 +324,7 @@ Your response:
 """
         elif role == "judger":
             user_content = f"""
-You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{ }}.
 "Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
 
 Input Question: {question}
@@ -425,7 +425,7 @@ The plan might contain irrelevant or incorrect contents. Ignore them if they are
 
 You must reason step-by-step to solve the **provided Target Question** without outputting other irrelevant information.
 
-Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Now, reason step by step and output the final answer inside \\boxed{{ }}.
 """
 
         elif task in ["arc_easy", "arc_challenge", "gpqa", "medqa"]:
@@ -443,7 +443,7 @@ The plan might contain irrelevant or incorrect contents. Ignore them if they are
 You must reason step-by-step to solve the **provided Target Question** without outputting other irrelevant information.
 Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
 
-Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Now, reason step by step and output the final answer inside \\boxed{{ }}.
 """
 
         elif task in ["mbppplus", "humanevalplus"]:
@@ -483,7 +483,7 @@ The plan might contain irrelevant or incorrect contents. Ignore them if they are
 You must reason step-by-step to solve the **provided Target Question** without outputting other irrelevant information.
 Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box.
 
-Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Now, reason step by step and output the final answer inside \\boxed{{ }}.
 """
         else:
             user_content = f"""
@@ -518,7 +518,7 @@ def build_agent_messages_hierarchical_text_mas(role: str, question: str, context
     if args.task in ['gsm8k', 'aime2024', 'aime2025']:
         if role == "planner":
             user_content = f"""
-You are a math agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a math agent. Given the final answer inside \\boxed{{ }}.
 
 Input Question: {question}
 
@@ -527,7 +527,7 @@ Your response:
     
         elif role == "critic":
             user_content = f"""
-You are a science agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a science agent. Given the final answer inside \\boxed{{ }}.
 
 Input Question: {question}     
 
@@ -536,7 +536,7 @@ Your response:
     
         elif role == "refiner":
             user_content = f"""
-You are a code agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a code agent. Given the final answer inside \\boxed{{ }}.
 
 Input Question: {question}
 
@@ -544,7 +544,7 @@ Your response:
 """
         elif role == "judger":
             user_content = f"""
-You are a task summarizer. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a task summarizer. Given the final answer inside \\boxed{{ }}.
 
 Content from Previous Agent:
 {context[:args.text_mas_context_length]}
@@ -557,7 +557,7 @@ Your response:
     elif args.task in ["arc_easy", "arc_challenge", "gpqa", "medqa"]:
         if role == "planner":
             user_content = f"""
-You are a math agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a math agent. Given the final answer inside \\boxed{{ }}.
 
 Input Question: {question}
 
@@ -566,7 +566,7 @@ Your response:
     
         elif role == "critic":
             user_content = f"""
-You are a science agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a science agent. Given the final answer inside \\boxed{{ }}.
 
 Input Question: {question}     
 
@@ -575,7 +575,7 @@ Your response:
     
         elif role == "refiner":
             user_content = f"""
-You are a code agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a code agent. Given the final answer inside \\boxed{{ }}.
 
 Input Question: {question}
 
@@ -584,7 +584,7 @@ Your response:
         elif role == "judger":
 
             user_content = f"""
-You are a task summarizer. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a task summarizer. Given the final answer inside \\boxed{{ }}.
 
 Content from Previous Agent:
 {context[:args.text_mas_context_length]}
@@ -644,7 +644,7 @@ Your response:
     elif args.task in ["winogrande"]:
         if role == "planner":
             user_content = f"""
-You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 "Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
 
 Input Question: {question}
@@ -654,7 +654,7 @@ Your response:
     
         elif role == "critic":
             user_content = f"""
-You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 "Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
 
 Input Question: {question}     
@@ -664,7 +664,7 @@ Your response:
     
         elif role == "refiner":
             user_content = f"""
-You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{ }}.
 "Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
 
 Input Question: {question}
@@ -673,7 +673,7 @@ Your response:
 """
         elif role == "judger":
             user_content = f"""
-You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{ }}.
 
 Content from Previous Agent:
 {context[:args.text_mas_context_length]}
@@ -708,7 +708,7 @@ You are a helpful assistant.
 
 You must reason step-by-step to solve the **provided Target Question** without outputting other irrelevant information.
 
-Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Now, reason step by step and output the final answer inside \\boxed{{ }}.
 """
 
     elif task in ["arc_easy", "arc_challenge", "gpqa", "medqa"]:
@@ -720,7 +720,7 @@ You are a helpful assistant.
 You must reason step-by-step to solve the **provided Target Question** without outputting other irrelevant information.
 Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
 
-Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Now, reason step by step and output the final answer inside \\boxed{{ }}.
 """
 
     elif task in ["mbppplus", "humanevalplus"]:
@@ -746,7 +746,7 @@ You are a helpful assistant.
 You must reason step-by-step to solve the **provided Target Question** without outputting other irrelevant information.
 Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box.
 
-Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Now, reason step by step and output the final answer inside \\boxed{{ }}.
 """
 
     else:
