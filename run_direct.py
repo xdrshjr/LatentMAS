@@ -56,16 +56,6 @@ def main_direct():
     # ============================================================================
     custom_questions: List[Dict] = [
         create_question_dict(
-            question="Janet has 16 candies. She eats 4 of them. How many candies does she have left?",
-            gold="12",
-            solution="12"
-        ),
-        create_question_dict(
-            question="A store has 24 apples. They sell 8 apples in the morning and 6 apples in the afternoon. How many apples are left?",
-            gold="10",
-            solution="10"
-        ),
-        create_question_dict(
             question="Tom has 15 books. He gives 3 books to his friend and buys 7 new books. How many books does Tom have now?",
             gold="19",
             solution="19"
@@ -87,7 +77,7 @@ def main_direct():
     # Create a mock args object with hardcoded parameters
     # We'll use argparse.Namespace to create an object similar to parsed args
     args_dict = {
-        "method": "latent_mas",  # Options: "baseline", "text_mas", "latent_mas"
+        "method": "baseline",  # Options: "baseline", "text_mas", "latent_mas"
         "model_name": "/root/autodl-fs/models/hub/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
         "max_samples": len(custom_questions),  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
