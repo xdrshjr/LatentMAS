@@ -89,7 +89,7 @@ class LatentMASMethod:
         final_texts = ["" for _ in range(batch_size)]
 
         for agent in self.agents:
-
+            #
             if self.args.prompt == "sequential":
                 batch_messages = [
                     build_agent_message_sequential_latent_mas(role=agent.role, question=item["question"], context="", method=self.method_name, args=self.args)
@@ -101,12 +101,12 @@ class LatentMASMethod:
                     for item in items
                 ]
 
-
+            # get the tokens within batch
             prompts, input_ids, attention_mask, tokens_batch = self.model.prepare_chat_batch(
                 batch_messages, add_generation_prompt=True
             )
 
-            if agent.role != "judger":
+            if agent.role != "judger":  # 不是judger，都需要进行latent思考，而judger需要根据latent思考进行思考
                 prev_past_len = _past_length(past_kv)
 
                 if self.args.think:
@@ -132,7 +132,7 @@ class LatentMASMethod:
                     attention_mask=wrapped_mask,
                     latent_steps=self.latent_steps,
                     past_key_values=past_kv,
-                )
+                )   # 模型思考n步，通过latent的vector进行思考，最终获取到思考结束后的kv-cache
                 if self.sequential_info_only or self.latent_only:
                     new_past_len = _past_length(past_kv)
                     tokens_added = new_past_len - prev_past_len

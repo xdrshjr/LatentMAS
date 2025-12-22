@@ -41,23 +41,23 @@ class ModelWrapper:
         self.pre_aligned = None
 
         if self.use_vllm:
-            
+
             tp_size = max(1, int(getattr(args, "tensor_parallel_size", 1)))
             gpu_util = float(getattr(args, "gpu_memory_utilization", 0.9))
-            
+
             print(f"[vLLM] Using vLLM backend for model {model_name}")
-            if args.enable_prefix_caching and args.method == "latent_mas": 
+            if args.enable_prefix_caching and args.method == "latent_mas":
                 self.vllm_engine = LLM(model=model_name, tensor_parallel_size=tp_size, gpu_memory_utilization=gpu_util, enable_prefix_caching=True, enable_prompt_embeds=True)
             else:
                 self.vllm_engine = LLM(model=model_name, tensor_parallel_size=tp_size, gpu_memory_utilization=gpu_util)
             self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
-            
+
             use_second_hf = bool(getattr(args, "use_second_HF_model", False)) if args else False
             if use_second_hf:
                 self.HF_model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     torch_dtype=(torch.bfloat16 if torch.cuda.is_available() else torch.float32),
-                ).to(args.device2).eval() 
+                ).to(args.device2).eval()
                 self.embedding_layer = self.HF_model.get_input_embeddings()
                 self.HF_device = args.device2
                 # if self.latent_space_realign:
@@ -121,7 +121,7 @@ class ModelWrapper:
     ) -> Tuple[List[str], torch.Tensor, torch.Tensor, List[List[str]]]:
         prompts: List[str] = []
         for messages in batch_messages:
-            prompts.append(self.render_chat(messages, add_generation_prompt=add_generation_prompt))
+            prompts.append(self.render_chat(messages, add_generation_prompt=add_generation_prompt)) # use tokenizer transfer into model template format
         encoded = self.tokenizer(
             prompts,
             return_tensors="pt",
@@ -154,10 +154,10 @@ class ModelWrapper:
         outputs = self.vllm_engine.generate(prompts, sampling_params)
         generations = [out.outputs[0].text.strip() for out in outputs]
         return generations
-    
+
     def _build_latent_realign_matrix(self, model, device, args) -> Tuple[torch.Tensor, torch.Tensor]:
-        input_embeds = model.get_input_embeddings() if hasattr(model, "get_input_embeddings") else None
-        output_embeds = model.get_output_embeddings() if hasattr(model, "get_output_embeddings") else None
+        input_embeds = model.get_input_embeddings() if hasattr(model, "get_input_embeddings") else None # 输入词嵌入, [vocab_size, emb_size][151669, 2560]
+        output_embeds = model.get_output_embeddings() if hasattr(model, "get_output_embeddings") else None # 输出词嵌入, [2560, 151669]
         if output_embeds is None:
             output_embeds = getattr(model, "lm_head", None)
         if (
@@ -167,14 +167,14 @@ class ModelWrapper:
             or not hasattr(output_embeds, "weight")
         ):
             raise RuntimeError("Cannot build latent realignment matrix: embedding weights not accessible.")
-        input_weight = input_embeds.weight.detach().to(device=device, dtype=torch.float32)
+        input_weight = input_embeds.weight.detach().to(device=device, dtype=torch.float32)  # detach是为了断开梯度，防止影响模型
         output_weight = output_embeds.weight.detach().to(device=device, dtype=torch.float32)
-        gram = torch.matmul(output_weight.T, output_weight)
-        reg = 1e-5 * torch.eye(gram.shape[0], device=gram.device, dtype=gram.dtype)
-        gram = gram + reg
-        rhs = torch.matmul(output_weight.T, input_weight)
-        realign_matrix = torch.linalg.solve(gram, rhs)
-        target_norm = input_weight.norm(dim=1).mean().detach()
+        gram = torch.matmul(output_weight.T, output_weight) # 衡量嵌入之间的相似度
+        reg = 1e-5 * torch.eye(gram.shape[0], device=gram.device, dtype=gram.dtype) # 添加正则项
+        gram = gram + reg   # 方程的左侧项
+        rhs = torch.matmul(output_weight.T, input_weight)   # 衡量输入和输出嵌入之间的关系， 方程的右侧项
+        realign_matrix = torch.linalg.solve(gram, rhs)  # 求解方程： GM = R，寻找一个M，M = G^-1 R
+        target_norm = input_weight.norm(dim=1).mean().detach()  # 计算向量的平均长度，作为缩放基准
 
         if self.args.latent_space_realign:
             pass
@@ -190,21 +190,21 @@ class ModelWrapper:
         target_device = torch.device(device)
 
         if info is None:
-            matrix, target_norm = self._build_latent_realign_matrix(model, target_device, args)
+            matrix, target_norm = self._build_latent_realign_matrix(model, target_device, args) # 获取初始化的latent realigin metrix
         else:
             matrix, target_norm = info
             if matrix.device != target_device:
                 matrix = matrix.to(target_device)
 
         target_norm = target_norm.to(device=target_device, dtype=matrix.dtype) if isinstance(target_norm, torch.Tensor) else torch.as_tensor(target_norm, device=target_device, dtype=matrix.dtype)
-        self._latent_realign_matrices[key] = (matrix, target_norm)
+        self._latent_realign_matrices[key] = (matrix, target_norm)  # 设置模型对应的realign metrix，和模型一一对应
 
         return matrix, target_norm
 
     def _apply_latent_realignment(self, hidden: torch.Tensor, model: torch.nn.Module) -> torch.Tensor:
         matrix, target_norm = self._ensure_latent_realign_matrix(model, hidden.device, self.args)
         hidden_fp32 = hidden.to(torch.float32)
-        aligned = torch.matmul(hidden_fp32, matrix)
+        aligned = torch.matmul(hidden_fp32, matrix) # 对齐hidden到输入空间, H:[B, D] x M:[D, D] = A:[B, D]
 
         aligned_norm = aligned.norm(dim=-1, keepdim=True).clamp_min(1e-6)
         pre_aligned = aligned.detach().clone()
@@ -308,29 +308,29 @@ class ModelWrapper:
             output_hidden_states=True,
             return_dict=True,
         )
-        past = outputs.past_key_values
+        past = outputs.past_key_values  # get the kv-cache hidden states
 
-        e_t = outputs.hidden_states[0][:, -1, :]          # [B, D]
-        last_hidden = outputs.hidden_states[-1][:, -1, :] # [B, D]
+        e_t = outputs.hidden_states[0][:, -1, :]          # [B, D], 获取第一层的所有batch的最后一个 token 的 hidden_states, embedding层
+        last_hidden = outputs.hidden_states[-1][:, -1, :] # [B, D], 获取最后一层的所有batch的最后一个 token 的 hidden_states, hidden层
         h_t = last_hidden.detach().clone()
 
         e_t_plus_1 = None
         latent_vecs_all: List[torch.Tensor] = []
-        latent_vecs_all.append(e_t.detach().clone())
+        latent_vecs_all.append(e_t.detach().clone())    # 所有隐藏层向量
 
-        for step in range(latent_steps):
+        for step in range(latent_steps):    # 使用latent思考多步
 
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model
-            latent_vec = self._apply_latent_realignment(last_hidden, source_model)
+            latent_vec = self._apply_latent_realignment(last_hidden, source_model)  # 取出hidden_vec，然后对齐到输入空间, [B, D], [4, 2560]
 
             latent_vecs_all.append(latent_vec.detach().clone())
 
             if step == 0:
                 e_t_plus_1 = latent_vec.detach().clone()
-            
+
             latent_embed = latent_vec.unsqueeze(1)
 
-            past_len = _past_length(past)
+            past_len = _past_length(past)   # kv-cache的长度， 121, 获取已经缓存的kv-cache长度
             latent_mask = torch.ones(
                 (latent_embed.shape[0], past_len + 1),
                 dtype=torch.long,
@@ -343,12 +343,12 @@ class ModelWrapper:
                 use_cache=True,
                 output_hidden_states=True,
                 return_dict=True,
-            )
+            )   # 把输出latent，连同kv-cache一起交给LLM
             past = outputs.past_key_values
             last_hidden = outputs.hidden_states[-1][:, -1, :]
 
         return past
-    
+
     @torch.no_grad()
     def generate_latent_batch_hidden_state(
         self,
@@ -383,11 +383,11 @@ class ModelWrapper:
         )
         past = outputs.past_key_values
         last_hidden = outputs.hidden_states[-1][:, -1, :]
-        
-        curr_output_embedding = [] 
+
+        curr_output_embedding = []
         curr_output_embedding.append(outputs.hidden_states[0])  # input embedding
-        
-        
+
+
         for _ in range(latent_steps):
 
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model

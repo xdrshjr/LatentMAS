@@ -87,21 +87,21 @@ def main_direct():
     # Create a mock args object with hardcoded parameters
     # We'll use argparse.Namespace to create an object similar to parsed args
     args_dict = {
-        "method": "baseline",  # Options: "baseline", "text_mas", "latent_mas"
+        "method": "latent_mas",  # Options: "baseline", "text_mas", "latent_mas"
         "model_name": "/root/autodl-fs/models/hub/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
         "max_samples": len(custom_questions),  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
         "prompt": "sequential",  # Options: "sequential", "hierarchical"
         "device": "cuda",  # Device to use
         "split": "test",  # Split name (not used in custom mode, but required)
-        "max_new_tokens": 4096,  # Maximum tokens to generate
-        "latent_steps": 0,  # Number of latent steps (for latent_mas)
+        "max_new_tokens": 8192,  # Maximum tokens to generate
+        "latent_steps": 10,  # Number of latent steps (for latent_mas)
         "temperature": 0.6,  # Sampling temperature
         "top_p": 0.95,  # Top-p sampling parameter
         "generate_bs": 20,  # Batch size for generation
         "text_mas_context_length": -1,  # Context length limit for text_mas
         "think": False,  # Add think token for LatentMAS
-        "latent_space_realign": False,  # Latent space realignment
+        "latent_space_realign": True,  # Latent space realignment
         "seed": 42,  # Random seed
         "use_vllm": False,  # Use vLLM backend
         "enable_prefix_caching": False,  # Enable prefix caching
