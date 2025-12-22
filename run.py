@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 from typing import Dict, List, Tuple, Optional
+import torch
 
 from data import (
     load_aime2024,
@@ -23,7 +24,10 @@ from utils import auto_device, set_seed, create_output_file_path, save_question_
 from config import ConfigLoader, MultiPathConfig, list_presets, get_preset_description
 from logging_config import setup_logging, create_log_file_path
 from progress_utils import get_progress_manager, reset_progress_manager
+from visualization.graph_viz import GraphVisualizer
 import time
+from pathlib import Path
+from datetime import datetime
 
 # Logger will be configured in main()
 logger = logging.getLogger(__name__)
@@ -43,6 +47,240 @@ def evaluate(preds: List[Dict]) -> Tuple[float, int]:
     acc = correct / total if total > 0 else 0.0
     logger.debug(f"Evaluation: {correct}/{total} correct, accuracy: {acc:.4f}")
     return acc, correct
+
+
+def _build_graph_from_paths(method, batch_idx: int):
+    """Build reasoning graph from path information.
+    
+    Args:
+        method: The LatentMASMultiPathMethod instance
+        batch_idx: Index of the item in the current batch
+        
+    Returns:
+        ReasoningGraph object or None if no paths available
+    """
+    try:
+        from methods.graph_structure import ReasoningGraph
+        
+        # Get all paths from path manager
+        path_manager = method.path_manager
+        if not path_manager.paths:
+            logger.debug(f"[Visualization] No paths available in path manager")
+            return None
+        
+        # Create a new graph
+        graph = ReasoningGraph()
+        
+        # Get all paths (we'll use all paths since we don't have batch_idx mapping)
+        all_paths = list(path_manager.paths.values())
+        
+        if not all_paths:
+            logger.debug(f"[Visualization] No paths found")
+            return None
+        
+        logger.debug(f"[Visualization] Building graph from {len(all_paths)} paths")
+        
+        # Create nodes for each path
+        # Each path becomes a leaf node in the graph
+        # We'll organize them by agent if metadata is available
+        path_to_node = {}  # Map path_id to node_id
+        agent_to_nodes = {}  # Map agent_name to list of node_ids
+        
+        for path in all_paths:
+            # Get agent name from metadata, or use path_id as fallback
+            agent_name = path.metadata.get('agent_name', f'agent_{path.path_id % 10}')
+            agent_idx = path.metadata.get('agent_idx', path.path_id)
+            
+            # Add node for this path
+            node_id = graph.add_node(
+                hidden_states=path.hidden_states,
+                kv_cache=path.kv_cache,
+                parent_id=None,  # We'll set parent relationships later
+                score=path.score,
+                metadata={
+                    'path_id': path.path_id,
+                    'agent_name': agent_name,
+                    'agent_idx': agent_idx,
+                    'step': path.metadata.get('step', 0),
+                    'latent_steps': len(path.latent_history),
+                    **{k: v for k, v in path.metadata.items() 
+                       if k not in ['agent_name', 'agent_idx', 'step'] and 
+                       not isinstance(v, torch.Tensor)}
+                }
+            )
+            path_to_node[path.path_id] = node_id
+            if not path.node_ids:
+                path.node_ids.append(node_id)
+            
+            # Track nodes by agent
+            if agent_name not in agent_to_nodes:
+                agent_to_nodes[agent_name] = []
+            agent_to_nodes[agent_name].append(node_id)
+            
+            logger.debug(f"[Visualization] Added node {node_id} for path {path.path_id} "
+                        f"(agent: {agent_name}, score: {path.score:.4f})")
+        
+        # Build hierarchical structure: earlier agents -> later agents
+        # Sort agents by minimum path_id in each group (earlier paths come first)
+        def get_min_path_id_for_agent(agent_nodes):
+            # Find the minimum path_id for nodes in this agent group
+            min_path_id = float('inf')
+            for node_id in agent_nodes:
+                # Find path that corresponds to this node
+                for path in all_paths:
+                    if path.path_id in path_to_node and path_to_node[path.path_id] == node_id:
+                        min_path_id = min(min_path_id, path.path_id)
+                        break
+            return min_path_id if min_path_id != float('inf') else 0
+        
+        sorted_agents = sorted(agent_to_nodes.items(), key=lambda x: get_min_path_id_for_agent(x[1]))
+        
+        # Create parent-child relationships between agents
+        for i in range(len(sorted_agents) - 1):
+            current_agent, current_nodes = sorted_agents[i]
+            next_agent, next_nodes = sorted_agents[i + 1]
+            
+            # Connect all nodes from current agent to all nodes from next agent
+            # This creates a bipartite structure
+            for current_node_id in current_nodes:
+                for next_node_id in next_nodes:
+                    current_node = graph.get_node(current_node_id)
+                    next_node = graph.get_node(next_node_id)
+                    if current_node and next_node:
+                        # Update parent-child relationship
+                        if next_node.parent_id is None:
+                            next_node.parent_id = current_node_id
+                            current_node.add_child(next_node_id)
+                            graph.edges.append((current_node_id, next_node_id))
+                            graph.leaf_ids.discard(current_node_id)
+                            logger.debug(f"[Visualization] Linked node {next_node_id} (agent: {next_agent}) "
+                                       f"to parent {current_node_id} (agent: {current_agent})")
+        
+        logger.info(f"[Visualization] Built graph with {len(graph.nodes)} nodes, "
+                   f"{len(graph.edges)} edges from {len(all_paths)} paths across {len(agent_to_nodes)} agents")
+        return graph
+        
+    except Exception as e:
+        logger.error(f"[Visualization] Failed to build graph from paths: {e}", exc_info=True)
+        logger.debug(f"[Visualization] Graph building error: {type(e).__name__}: {str(e)}")
+        return None
+
+
+def generate_visualizations(
+    method,
+    batch_idx: int,
+    problem_idx: int,
+    question: str,
+    args: argparse.Namespace,
+    output_dir: Optional[str] = None
+) -> None:
+    """Generate visualization graphs for latent reasoning.
+    
+    Args:
+        method: The method instance (should be LatentMASMultiPathMethod for graph visualization)
+        batch_idx: Index of the item in the current batch
+        problem_idx: Global problem index
+        question: The question text
+        args: Command line arguments
+        output_dir: Optional output directory for visualization files
+    """
+    # Only generate visualizations for latent_mas_multipath method
+    if not isinstance(method, LatentMASMultiPathMethod):
+        logger.debug(f"[Visualization] Skipping visualization for method {type(method).__name__}")
+        return
+    
+    try:
+        logger.info("=" * 80)
+        logger.info(f"[Visualization] Generating visualizations for problem #{problem_idx}")
+        logger.info("=" * 80)
+        
+        # Create output directory
+        if output_dir is None:
+            model_short = args.model_name.split('/')[-1] if '/' in args.model_name else args.model_name
+            task_name = args.task if hasattr(args, 'task') else "custom"
+            output_dir = Path("output") / "visualizations" / f"{task_name}_{args.method}_{model_short}"
+        else:
+            output_dir = Path(output_dir)
+        
+        output_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"[Visualization] Output directory: {output_dir}")
+        
+        # Get reasoning graph from method or build from paths
+        reasoning_graph = method.reasoning_graph
+        if reasoning_graph is None or len(reasoning_graph.nodes) == 0:
+            # Try to build graph from path information
+            logger.info(f"[Visualization] Graph is empty, building from path information")
+            reasoning_graph = _build_graph_from_paths(method, batch_idx)
+            if reasoning_graph is None or len(reasoning_graph.nodes) == 0:
+                logger.warning(f"[Visualization] No graph data available for problem #{problem_idx}")
+                return
+        
+        logger.info(f"[Visualization] Graph stats: {len(reasoning_graph.nodes)} nodes, "
+                   f"{len(reasoning_graph.edges)} edges")
+        
+        # Initialize visualizers
+        graph_viz = GraphVisualizer()
+        
+        # Generate graph visualization (DOT format)
+        dot_file = output_dir / f"problem_{problem_idx}_graph.dot"
+        logger.info(f"[Visualization] Exporting graph to DOT format: {dot_file}")
+        graph_viz.export_to_dot(
+            graph=reasoning_graph,
+            output_path=str(dot_file),
+            show_scores=True,
+            show_metadata=True,
+            highlight_best_path=True
+        )
+        logger.debug(f"[Visualization] DOT file saved: {dot_file}")
+        
+        # Generate graph visualization (HTML format)
+        html_file = output_dir / f"problem_{problem_idx}_graph.html"
+        logger.info(f"[Visualization] Exporting graph to HTML format: {html_file}")
+        graph_viz.export_to_html(
+            graph=reasoning_graph,
+            output_path=str(html_file),
+            include_stats=True
+        )
+        logger.debug(f"[Visualization] HTML file saved: {html_file}")
+        
+        # Generate path genealogy
+        genealogy_file = output_dir / f"problem_{problem_idx}_genealogy.json"
+        logger.info(f"[Visualization] Exporting path genealogy: {genealogy_file}")
+        graph_viz.export_path_genealogy(
+            graph=reasoning_graph,
+            output_path=str(genealogy_file),
+            format='json'
+        )
+        logger.debug(f"[Visualization] Genealogy file saved: {genealogy_file}")
+        
+        # Generate path analysis report
+        # Note: PathAnalyzer needs path history, which we need to collect from the method
+        # For now, we'll generate basic statistics from the graph
+        stats = reasoning_graph.get_statistics()
+        logger.debug(f"[Visualization] Graph statistics: {stats}")
+        
+        # Save graph statistics
+        stats_file = output_dir / f"problem_{problem_idx}_stats.json"
+        try:
+            with open(stats_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'problem_idx': problem_idx,
+                    'question': question[:200],  # Truncate long questions
+                    'timestamp': datetime.now().isoformat(),
+                    'graph_stats': stats,
+                }, f, indent=2)
+            logger.debug(f"[Visualization] Statistics file saved: {stats_file}")
+        except Exception as e:
+            logger.warning(f"[Visualization] Failed to save statistics file: {e}")
+            logger.debug(f"[Visualization] Statistics save error: {type(e).__name__}: {str(e)}")
+        
+        logger.info(f"[Visualization] All visualizations generated successfully for problem #{problem_idx}")
+        logger.info(f"[Visualization] Output directory: {output_dir}")
+        logger.info("=" * 80)
+        
+    except Exception as e:
+        logger.error(f"[Visualization] Failed to generate visualizations for problem #{problem_idx}: {e}", exc_info=True)
+        logger.debug(f"[Visualization] Error details: {type(e).__name__}: {str(e)}")
 
 # Main processing function for each batch
 def process_batch(
@@ -82,7 +320,7 @@ def process_batch(
     
     # Log questions in the batch
     for batch_idx, item in enumerate(current_batch):
-        logger.info(f"Batch item {batch_idx + 1}/{len(current_batch)}: {item.get('question', '')[:100]}...")
+        logger.info(f"Batch item {batch_idx + 1}/{len(current_batch)}: {item.get('question', '')[:200]}...")
     
     try:
         if args.method in ["latent_mas", "latent_mas_multipath"] and args.use_vllm: 
@@ -175,6 +413,21 @@ def process_batch(
                 logger.info(f"  Agent {agent_idx + 1}: {name} ({role}) - aggregated {a.get('num_paths_aggregated')} paths")
             else:
                 logger.info(f"  Agent {agent_idx + 1}: {name} ({role})")
+        
+        # Generate visualizations for latent_mas_multipath method
+        try:
+            generate_visualizations(
+                method=method,
+                batch_idx=offset,
+                problem_idx=problem_idx,
+                question=res.get('question', ''),
+                args=args,
+                output_dir=None  # Will use default directory
+            )
+        except Exception as e:
+            # Log warning but don't fail the entire process
+            logger.warning(f"[Visualization] Failed to generate visualizations for problem #{problem_idx}: {e}")
+            logger.debug(f"[Visualization] Visualization error details: {type(e).__name__}: {str(e)}", exc_info=True)
 
     processed += len(results)
     

@@ -390,7 +390,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         batch_paths[batch_idx],
                         agent_idx,
                         len(self.agents)
-                    )
+                    )   # 当路径中的不确定性大于阈值的时候，需要创建一个分支
                     
                     if should_branch and past_kv is not None:
                         # Branch from existing paths

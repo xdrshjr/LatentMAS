@@ -166,10 +166,12 @@ def main_direct():
     # ============================================================================
     # Create a mock args object with hardcoded parameters
     # We'll use argparse.Namespace to create an object similar to parsed args
+    # "/root/autodl-fs/models/hub/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c"
+    #
     args_dict = {
         # Core parameters
-        "method": "latent_mas",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
-        "model_name": "/root/autodl-fs/models/hub/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
+        "method": "latent_mas_multipath",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
+        "model_name": "Qwen/Qwen3-4B",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
         "max_samples": len(custom_questions),  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
         "prompt": "sequential",  # Options: "sequential", "hierarchical"
@@ -177,7 +179,7 @@ def main_direct():
         "split": "test",  # Split name (not used in custom mode, but required)
         
         # Generation parameters
-        "max_new_tokens": 8192,  # Maximum tokens to generate
+        "max_new_tokens": 12288,  # Maximum tokens to generate
         "latent_steps": 10,  # Number of latent steps (for latent_mas and latent_mas_multipath)
         "temperature": 0.6,  # Sampling temperature
         "top_p": 0.95,  # Top-p sampling parameter
