@@ -476,9 +476,14 @@ class ModelWrapper:
         for path_idx in range(num_paths):
             logger.info(f"[Path Generation] Starting path {path_idx + 1}/{num_paths}")
             
-            # Get temperature for this path
+            # Get temperature for this path (will be used for diversity)
             temperature = diversity_strategy.get_temperature(path_idx, num_paths)
             logger.debug(f"[Path Generation] Path {path_idx + 1} temperature: {temperature:.4f}")
+            
+            # Set random seed based on path index for reproducible diversity
+            if path_idx > 0:
+                torch.manual_seed(42 + path_idx)
+                logger.debug(f"[Path Generation] Path {path_idx + 1}: set random seed to {42 + path_idx}")
             
             # Generate initial hidden states
             if past_key_values is not None:
@@ -511,15 +516,30 @@ class ModelWrapper:
             last_hidden = diversity_strategy.apply(
                 last_hidden,
                 path_idx,
-                num_paths
+                num_paths,
+                step=0,
+                total_steps=latent_steps,
+                temperature=temperature
             )
             
             # Track latent history for this path
             latent_history = []
             
-            # Generate latent steps
+            # Generate latent steps with continuous diversity
             for step in range(latent_steps):
                 logger.debug(f"[Path Generation] Path {path_idx + 1}, latent step {step + 1}/{latent_steps}")
+                
+                # Apply diversity at each step for continuous differentiation
+                if path_idx > 0:
+                    last_hidden = diversity_strategy.apply(
+                        last_hidden,
+                        path_idx,
+                        num_paths,
+                        step=step + 1,
+                        total_steps=latent_steps,
+                        temperature=temperature
+                    )
+                    logger.debug(f"[Path Generation] Path {path_idx + 1}, step {step + 1}: Applied diversity transformation")
                 
                 # Apply latent realignment
                 source_model = self.HF_model if hasattr(self, "HF_model") else self.model
@@ -661,11 +681,23 @@ class ModelWrapper:
         for branch_idx in range(num_branches):
             logger.info(f"[Branching] Creating branch {branch_idx + 1}/{num_branches}")
             
+            # Get temperature for this branch
+            temperature = diversity_strategy.get_temperature(branch_idx, num_branches)
+            logger.debug(f"[Branching] Branch {branch_idx + 1} temperature: {temperature:.4f}")
+            
+            # Set random seed for reproducible diversity
+            if branch_idx > 0:
+                torch.manual_seed(42 + branch_idx + 1000)  # Offset to avoid collision with path generation
+                logger.debug(f"[Branching] Branch {branch_idx + 1}: set random seed")
+            
             # Apply diversity to create different branch starting points
             branch_hidden = diversity_strategy.apply(
                 base_hidden.clone(),
                 branch_idx,
-                num_branches
+                num_branches,
+                step=0,
+                total_steps=latent_steps,
+                temperature=temperature
             )
             logger.debug(f"[Branching] Branch {branch_idx + 1} divergence applied")
             
@@ -676,9 +708,21 @@ class ModelWrapper:
             
             latent_history = []
             
-            # Generate latent steps for this branch
+            # Generate latent steps for this branch with continuous diversity
             for step in range(latent_steps):
                 logger.debug(f"[Branching] Branch {branch_idx + 1}, latent step {step + 1}/{latent_steps}")
+                
+                # Apply diversity at each step for continuous differentiation
+                if branch_idx > 0:
+                    last_hidden = diversity_strategy.apply(
+                        last_hidden,
+                        branch_idx,
+                        num_branches,
+                        step=step + 1,
+                        total_steps=latent_steps,
+                        temperature=temperature
+                    )
+                    logger.debug(f"[Branching] Branch {branch_idx + 1}, step {step + 1}: Applied diversity")
                 
                 # Apply latent realignment
                 source_model = self.HF_model if hasattr(self, "HF_model") else self.model
@@ -718,6 +762,7 @@ class ModelWrapper:
                 'hidden_states': last_hidden.detach().clone(),
                 'kv_cache': past,
                 'metadata': {
+                    'temperature': temperature,
                     'latent_steps': latent_steps,
                     'diversity_strategy': diversity_strategy.__class__.__name__,
                     'branched_from_past_length': _past_length(base_past),

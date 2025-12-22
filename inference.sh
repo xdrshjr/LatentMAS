@@ -22,6 +22,6 @@ python run.py \
   --prompt sequential \
   --config_preset balanced \
   --max_samples -1 \
-  --max_new_tokens 2048 \
+  --max_new_tokens 512 \
   --seed 42 \
   --latent_steps 10

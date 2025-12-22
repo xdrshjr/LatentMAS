@@ -60,27 +60,33 @@ class TemperatureDiversityStrategy(DiversityStrategy):
     """Generate diversity using different temperature settings.
     
     Uses different temperatures for each path to encourage exploration.
-    Higher temperatures lead to more random sampling.
+    Since latent generation is deterministic, this strategy applies
+    temperature-scaled noise to hidden states.
     
     Attributes:
         base_temp: Base temperature value
         temp_range: Range of temperature variation
+        noise_scale: Base noise scale for temperature-based perturbation
     """
     
     def __init__(
         self,
         base_temp: float = 0.7,
-        temp_range: float = 0.6
+        temp_range: float = 0.6,
+        noise_scale: float = 0.2
     ):
         """Initialize temperature diversity strategy.
         
         Args:
             base_temp: Base temperature (for path 0)
             temp_range: Temperature range (max_temp = base_temp + temp_range)
+            noise_scale: Base noise scale for perturbation
         """
         self.base_temp = base_temp
         self.temp_range = temp_range
-        logger.debug(f"[TemperatureDiversityStrategy] Initialized with base_temp={base_temp}, temp_range={temp_range}")
+        self.noise_scale = noise_scale
+        logger.debug(f"[TemperatureDiversityStrategy] Initialized with base_temp={base_temp}, "
+                    f"temp_range={temp_range}, noise_scale={noise_scale}")
     
     def apply(
         self,
@@ -89,27 +95,52 @@ class TemperatureDiversityStrategy(DiversityStrategy):
         total_paths: int,
         **kwargs
     ) -> torch.Tensor:
-        """Apply temperature-based diversity.
+        """Apply temperature-based diversity through noise perturbation.
         
-        Temperature affects the randomness in subsequent sampling operations.
-        This method returns the hidden states unchanged but stores temperature
-        for later use in generation.
+        Since latent generation is deterministic, we use temperature to scale
+        noise that's added to hidden states, simulating the effect of sampling
+        at different temperatures.
         
         Args:
             hidden_states: Input hidden states [B, D]
             path_index: Current path index
             total_paths: Total number of paths
-            **kwargs: Additional parameters
+            **kwargs: Additional parameters (temperature, step, total_steps)
             
         Returns:
-            Hidden states (unchanged for this strategy)
+            Hidden states with temperature-scaled perturbation
         """
-        temp = self.get_temperature(path_index, total_paths)
+        temp = kwargs.get('temperature', self.get_temperature(path_index, total_paths))
         logger.debug(f"[TemperatureDiversityStrategy] Path {path_index}/{total_paths}: temperature={temp:.3f}")
         
-        # Temperature is used in sampling, not in hidden state modification
-        # Return hidden states unchanged
-        return hidden_states
+        # Path 0 is deterministic
+        if path_index == 0:
+            logger.debug(f"[TemperatureDiversityStrategy] Path 0: no perturbation (deterministic)")
+            return hidden_states
+        
+        # Get step info for progressive noise reduction
+        step = kwargs.get('step', 0)
+        total_steps = kwargs.get('total_steps', 1)
+        
+        # Scale noise by temperature (higher temp = more noise)
+        # Normalize temperature to [0, 1] range for scaling
+        temp_normalized = (temp - self.base_temp) / self.temp_range if self.temp_range > 0 else 0.0
+        temp_normalized = max(0.0, min(1.0, temp_normalized))
+        
+        # Reduce noise as we progress through steps
+        step_factor = 1.0 - (0.2 * step / total_steps) if total_steps > 0 else 1.0
+        
+        # Calculate final noise scale
+        noise_scale = self.noise_scale * (0.5 + temp_normalized) * step_factor
+        
+        # Add temperature-scaled Gaussian noise
+        noise = torch.randn_like(hidden_states) * noise_scale
+        perturbed = hidden_states + noise
+        
+        logger.debug(f"[TemperatureDiversityStrategy] Path {path_index}: noise_scale={noise_scale:.4f}, "
+                    f"noise_norm={noise.norm().item():.4f}")
+        
+        return perturbed
     
     def get_temperature(self, path_index: int, total_paths: int) -> float:
         """Get temperature for a specific path.
@@ -139,22 +170,27 @@ class NoiseDiversityStrategy(DiversityStrategy):
     Attributes:
         noise_scale: Standard deviation of Gaussian noise
         adaptive: Whether to adapt noise based on path index
+        continuous: Whether to apply noise at every step
     """
     
     def __init__(
         self,
-        noise_scale: float = 0.1,
-        adaptive: bool = True
+        noise_scale: float = 0.3,
+        adaptive: bool = True,
+        continuous: bool = True
     ):
         """Initialize noise diversity strategy.
         
         Args:
-            noise_scale: Standard deviation of Gaussian noise
+            noise_scale: Standard deviation of Gaussian noise (increased default from 0.1 to 0.3)
             adaptive: If True, scale noise based on path index
+            continuous: If True, apply noise at every latent step
         """
         self.noise_scale = noise_scale
         self.adaptive = adaptive
-        logger.debug(f"[NoiseDiversityStrategy] Initialized with noise_scale={noise_scale}, adaptive={adaptive}")
+        self.continuous = continuous
+        logger.debug(f"[NoiseDiversityStrategy] Initialized with noise_scale={noise_scale}, "
+                    f"adaptive={adaptive}, continuous={continuous}")
     
     def apply(
         self,
@@ -169,7 +205,7 @@ class NoiseDiversityStrategy(DiversityStrategy):
             hidden_states: Input hidden states [B, D]
             path_index: Current path index
             total_paths: Total number of paths
-            **kwargs: Additional parameters
+            **kwargs: Additional parameters (step, total_steps, temperature)
             
         Returns:
             Hidden states with added noise
@@ -179,10 +215,26 @@ class NoiseDiversityStrategy(DiversityStrategy):
             logger.debug(f"[NoiseDiversityStrategy] Path 0: no noise applied (deterministic)")
             return hidden_states
         
+        # Get current step info for continuous noise application
+        step = kwargs.get('step', 0)
+        total_steps = kwargs.get('total_steps', 1)
+        temperature = kwargs.get('temperature', 1.0)
+        
         # Calculate noise scale for this path
         if self.adaptive:
             # More noise for higher path indices
-            scale = self.noise_scale * (path_index / total_paths)
+            path_factor = (path_index / max(1, total_paths - 1))
+            
+            # If continuous, reduce noise as we progress through steps
+            if self.continuous and total_steps > 0:
+                step_factor = 1.0 - (0.3 * step / total_steps)  # Reduce noise by up to 30% as we progress
+            else:
+                step_factor = 1.0
+            
+            # Use temperature to scale noise
+            temp_factor = min(temperature / 0.7, 2.0)  # Scale by temperature, cap at 2x
+            
+            scale = self.noise_scale * path_factor * step_factor * temp_factor
         else:
             scale = self.noise_scale
         
@@ -190,7 +242,7 @@ class NoiseDiversityStrategy(DiversityStrategy):
         noise = torch.randn_like(hidden_states) * scale
         noisy_hidden = hidden_states + noise
         
-        logger.debug(f"[NoiseDiversityStrategy] Path {path_index}/{total_paths}: "
+        logger.debug(f"[NoiseDiversityStrategy] Path {path_index}/{total_paths}, step {step}/{total_steps}: "
                     f"noise_scale={scale:.4f}, noise_norm={noise.norm().item():.4f}")
         
         return noisy_hidden
@@ -284,11 +336,11 @@ class HybridDiversityStrategy(DiversityStrategy):
         self.combination_mode = combination_mode
         
         if not self.strategies:
-            # Default: combine temperature and noise strategies
+            # Default: combine temperature and noise strategies with increased diversity
             logger.info("[HybridDiversityStrategy] No strategies provided, using default combination")
             self.strategies = [
-                (TemperatureDiversityStrategy(), 0.5),
-                (NoiseDiversityStrategy(noise_scale=0.1), 0.5)
+                (TemperatureDiversityStrategy(noise_scale=0.2), 0.5),
+                (NoiseDiversityStrategy(noise_scale=0.3, continuous=True), 0.5)
             ]
         
         logger.info(f"[HybridDiversityStrategy] Initialized with {len(self.strategies)} strategies, "

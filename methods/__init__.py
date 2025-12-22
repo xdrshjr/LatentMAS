@@ -32,6 +32,17 @@ from .path_merging import (
 # Import multi-path method
 from .latent_mas_multipath import LatentMASMultiPathMethod
 
+# Import scoring metrics
+from .scoring_metrics import (
+    BaseScorer,
+    SelfConsistencyScorer,
+    PerplexityScorer,
+    VerificationScorer,
+    HiddenStateQualityScorer,
+    LatentConsistencyScorer,
+    EnsembleScorer,
+)
+
 
 __all__ = [
     "Agent",
@@ -45,4 +56,11 @@ __all__ = [
     "MergeCandidate",
     "MergeStatistics",
     "LatentMASMultiPathMethod",
+    "BaseScorer",
+    "SelfConsistencyScorer",
+    "PerplexityScorer",
+    "VerificationScorer",
+    "HiddenStateQualityScorer",
+    "LatentConsistencyScorer",
+    "EnsembleScorer",
 ]

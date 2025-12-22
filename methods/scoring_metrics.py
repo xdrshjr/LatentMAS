@@ -97,6 +97,8 @@ class SelfConsistencyScorer(BaseScorer):
             Consistency score in [0, 1]
         """
         logger.debug(f"[SelfConsistencyScorer] Computing score for path {path_state.path_id}")
+        logger.debug(f"[SelfConsistencyScorer] Will generate {self.num_samples} samples "
+                    f"with temperature={self.temperature:.2f}")
         
         try:
             # Generate multiple answers from the same path
@@ -129,11 +131,13 @@ class SelfConsistencyScorer(BaseScorer):
             
             # Handle edge cases
             if not answers:
-                logger.warning(f"[SelfConsistencyScorer] No valid answers generated for path {path_state.path_id}")
+                logger.warning(f"[SelfConsistencyScorer] No valid answers generated for path {path_state.path_id} "
+                             f"(attempted {self.num_samples} samples). Returning score 0.0")
                 return 0.0
             
             if len(answers) == 1:
-                logger.debug(f"[SelfConsistencyScorer] Only 1 answer generated, returning default score 0.5")
+                logger.debug(f"[SelfConsistencyScorer] Only 1 valid answer generated out of {self.num_samples} samples "
+                           f"for path {path_state.path_id}, returning default score 0.5")
                 return 0.5
             
             # Calculate consistency: frequency of most common answer
@@ -165,21 +169,69 @@ class SelfConsistencyScorer(BaseScorer):
         Returns:
             Generated answer text
         """
-        # This is a simplified implementation
-        # In practice, this would use the model_wrapper's generation capabilities
-        # with the path's KV cache
+        import torch
         
-        # For now, we need to check if model_wrapper has the necessary methods
-        if not hasattr(self.model_wrapper, 'generate_from_kv_cache'):
-            # Fallback: return empty string if method not available
-            logger.debug("[SelfConsistencyScorer] model_wrapper does not have generate_from_kv_cache method")
+        logger.debug(f"[SelfConsistencyScorer] Generating answer from path {path_state.path_id} "
+                    f"with temperature={temperature:.2f}")
+        
+        try:
+            # Check if we have a valid kv_cache
+            if path_state.kv_cache is None:
+                logger.warning(f"[SelfConsistencyScorer] Path {path_state.path_id} has no kv_cache")
+                return ""
+            
+            # Check if model_wrapper has the necessary methods
+            if not hasattr(self.model_wrapper, 'generate_text_batch'):
+                logger.error("[SelfConsistencyScorer] model_wrapper does not have generate_text_batch method")
+                return ""
+            
+            if not hasattr(self.model_wrapper, 'tokenizer'):
+                logger.error("[SelfConsistencyScorer] model_wrapper does not have tokenizer")
+                return ""
+            
+            # Create a continuation token to trigger generation from kv_cache
+            # We use a newline token or BOS token to continue generation
+            tokenizer = self.model_wrapper.tokenizer
+            
+            # Try to use a neutral continuation token (newline or space)
+            continuation_text = "\n"
+            continuation_ids = tokenizer.encode(continuation_text, add_special_tokens=False, return_tensors="pt")
+            
+            # If tokenization failed, use a single padding token
+            if continuation_ids.shape[1] == 0:
+                continuation_ids = torch.tensor([[tokenizer.pad_token_id or 0]], dtype=torch.long)
+            
+            continuation_ids = continuation_ids.to(self.model_wrapper.device)
+            
+            # Create attention mask for the continuation token
+            attention_mask = torch.ones_like(continuation_ids, dtype=torch.long)
+            
+            # Generate text using the kv_cache from this path
+            logger.debug(f"[SelfConsistencyScorer] Calling generate_text_batch with kv_cache "
+                        f"from path {path_state.path_id}")
+            
+            generated_texts, _ = self.model_wrapper.generate_text_batch(
+                input_ids=continuation_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=256,
+                temperature=temperature,
+                top_p=0.95,
+                past_key_values=path_state.kv_cache
+            )
+            
+            # Extract the first (and only) generated text
+            if generated_texts and len(generated_texts) > 0:
+                answer_text = generated_texts[0]
+                logger.debug(f"[SelfConsistencyScorer] Generated answer preview: {answer_text[:100]}...")
+                return answer_text
+            else:
+                logger.warning(f"[SelfConsistencyScorer] No text generated for path {path_state.path_id}")
+                return ""
+                
+        except Exception as e:
+            logger.error(f"[SelfConsistencyScorer] Error generating answer from path {path_state.path_id}: {e}")
+            logger.debug(f"[SelfConsistencyScorer] Exception details:", exc_info=True)
             return ""
-        
-        return self.model_wrapper.generate_from_kv_cache(
-            kv_cache=path_state.kv_cache,
-            max_new_tokens=256,
-            temperature=temperature
-        )
     
     def _default_extract_answer(self, text: str) -> Optional[str]:
         """Default answer extraction logic.
@@ -842,6 +894,381 @@ class HiddenStateQualityScorer(BaseScorer):
         except Exception as e:
             logger.error(f"[HiddenStateQualityScorer] Error computing entropy: {e}")
             return 0.5
+
+
+class LatentConsistencyScorer(BaseScorer):
+    """Scores paths based on latent-level consistency across multiple paths.
+    
+    Directly compares the hidden states (latents) from different paths without decoding.
+    This is much faster than text-based self-consistency checking.
+    
+    Attributes:
+        similarity_metric: Method to compute similarity ('cosine', 'euclidean', 'l2')
+        aggregation_method: How to aggregate pairwise similarities ('mean', 'min', 'max')
+        use_last_latent: Whether to use only the last latent or average all latents
+    """
+    
+    def __init__(
+        self,
+        similarity_metric: str = 'cosine',
+        aggregation_method: str = 'mean',
+        use_last_latent: bool = True
+    ):
+        """Initialize the latent consistency scorer.
+        
+        Args:
+            similarity_metric: Method for computing similarity between latents
+            aggregation_method: Method for aggregating pairwise similarities
+            use_last_latent: If True, use only the last latent; if False, average all latents
+        """
+        self.similarity_metric = similarity_metric
+        self.aggregation_method = aggregation_method
+        self.use_last_latent = use_last_latent
+        
+        logger.info(f"[LatentConsistencyScorer] Initialized with similarity_metric={similarity_metric}, "
+                   f"aggregation={aggregation_method}, use_last_latent={use_last_latent}")
+    
+    def score(
+        self,
+        path_states: List[Any],
+        **kwargs
+    ) -> float:
+        """Compute latent-level consistency score across multiple paths.
+        
+        Args:
+            path_states: List of PathState objects to compare
+            **kwargs: Additional arguments (ignored)
+            
+        Returns:
+            Consistency score in [0, 1] where higher means more consistent
+        """
+        logger.debug(f"[LatentConsistencyScorer] Computing latent consistency for {len(path_states)} paths")
+        
+        # Handle edge cases
+        if not path_states:
+            logger.warning("[LatentConsistencyScorer] No paths provided, returning score 0.0")
+            return 0.0
+        
+        if len(path_states) == 1:
+            logger.debug("[LatentConsistencyScorer] Only 1 path provided, returning perfect score 1.0")
+            return 1.0
+        
+        try:
+            # Extract latent representations from each path
+            latent_vectors = []
+            
+            for i, path_state in enumerate(path_states):
+                latent_vec = self._extract_latent_representation(path_state)
+                
+                if latent_vec is None:
+                    logger.warning(f"[LatentConsistencyScorer] Path {i} (id={getattr(path_state, 'path_id', 'N/A')}) "
+                                 f"has no valid latent representation, skipping")
+                    continue
+                
+                latent_vectors.append(latent_vec)
+                logger.debug(f"[LatentConsistencyScorer] Extracted latent from path {i}, shape={latent_vec.shape}")
+            
+            # Need at least 2 valid latents to compute consistency
+            if len(latent_vectors) < 2:
+                logger.warning(f"[LatentConsistencyScorer] Only {len(latent_vectors)} valid latents found, "
+                             f"returning neutral score 0.5")
+                return 0.5
+            
+            # Compute pairwise similarities
+            pairwise_similarities = self._compute_pairwise_similarities(latent_vectors)
+            
+            if not pairwise_similarities:
+                logger.warning("[LatentConsistencyScorer] No valid pairwise similarities computed, returning 0.0")
+                return 0.0
+            
+            # Aggregate similarities into a single consistency score
+            consistency_score = self._aggregate_similarities(pairwise_similarities)
+            
+            logger.info(f"[LatentConsistencyScorer] Latent consistency across {len(latent_vectors)} paths: "
+                       f"{consistency_score:.4f} (metric={self.similarity_metric}, "
+                       f"aggregation={self.aggregation_method})")
+            logger.debug(f"[LatentConsistencyScorer] Pairwise similarities: "
+                        f"min={min(pairwise_similarities):.4f}, "
+                        f"max={max(pairwise_similarities):.4f}, "
+                        f"mean={np.mean(pairwise_similarities):.4f}")
+            
+            return consistency_score
+        
+        except Exception as e:
+            logger.error(f"[LatentConsistencyScorer] Error computing latent consistency: {e}", exc_info=True)
+            return 0.0
+    
+    def _extract_latent_representation(self, path_state: Any) -> Optional[torch.Tensor]:
+        """Extract a single latent vector representation from a path.
+        
+        Args:
+            path_state: PathState object
+            
+        Returns:
+            Latent vector tensor, or None if unavailable
+        """
+        try:
+            if self.use_last_latent:
+                # Use the last latent vector in the history
+                if hasattr(path_state, 'latent_history') and path_state.latent_history:
+                    latent = path_state.latent_history[-1]
+                    logger.debug(f"[LatentConsistencyScorer] Using last latent from history, shape={latent.shape}")
+                    return latent.flatten()
+                
+                # Fallback to hidden_states
+                elif hasattr(path_state, 'hidden_states') and path_state.hidden_states is not None:
+                    latent = path_state.hidden_states
+                    logger.debug(f"[LatentConsistencyScorer] Using hidden_states as fallback, shape={latent.shape}")
+                    return latent.flatten()
+                
+                else:
+                    logger.warning("[LatentConsistencyScorer] No latent_history or hidden_states available")
+                    return None
+            
+            else:
+                # Average all latents in the history
+                if hasattr(path_state, 'latent_history') and path_state.latent_history:
+                    if len(path_state.latent_history) == 0:
+                        return None
+                    
+                    # Stack and average all latents
+                    stacked_latents = torch.stack([lat.flatten() for lat in path_state.latent_history])
+                    averaged_latent = stacked_latents.mean(dim=0)
+                    
+                    logger.debug(f"[LatentConsistencyScorer] Averaged {len(path_state.latent_history)} latents, "
+                               f"shape={averaged_latent.shape}")
+                    return averaged_latent
+                
+                else:
+                    logger.warning("[LatentConsistencyScorer] No latent_history available for averaging")
+                    return None
+        
+        except Exception as e:
+            logger.error(f"[LatentConsistencyScorer] Error extracting latent representation: {e}")
+            return None
+    
+    def _compute_pairwise_similarities(self, latent_vectors: List[torch.Tensor]) -> List[float]:
+        """Compute pairwise similarities between all latent vectors.
+        
+        Args:
+            latent_vectors: List of latent vector tensors
+            
+        Returns:
+            List of pairwise similarity scores
+        """
+        similarities = []
+        n = len(latent_vectors)
+        
+        for i in range(n):
+            for j in range(i + 1, n):
+                vec1 = latent_vectors[i]
+                vec2 = latent_vectors[j]
+                
+                # Ensure same shape
+                if vec1.shape != vec2.shape:
+                    logger.warning(f"[LatentConsistencyScorer] Shape mismatch between vectors "
+                                 f"{i} and {j}: {vec1.shape} vs {vec2.shape}, skipping")
+                    continue
+                
+                # Compute similarity based on selected metric
+                similarity = self._compute_similarity(vec1, vec2)
+                
+                if similarity is not None:
+                    similarities.append(similarity)
+                    logger.debug(f"[LatentConsistencyScorer] Similarity between paths {i} and {j}: {similarity:.4f}")
+        
+        return similarities
+    
+    def _compute_similarity(self, vec1: torch.Tensor, vec2: torch.Tensor) -> Optional[float]:
+        """Compute similarity between two latent vectors.
+        
+        Args:
+            vec1: First latent vector
+            vec2: Second latent vector
+            
+        Returns:
+            Similarity score in [0, 1], or None on error
+        """
+        try:
+            if self.similarity_metric == 'cosine':
+                # Cosine similarity: [-1, 1] -> map to [0, 1]
+                sim = F.cosine_similarity(vec1.unsqueeze(0), vec2.unsqueeze(0)).item()
+                # Map [-1, 1] to [0, 1]
+                normalized_sim = (sim + 1.0) / 2.0
+                return normalized_sim
+            
+            elif self.similarity_metric == 'euclidean':
+                # Euclidean distance -> convert to similarity
+                distance = torch.norm(vec1 - vec2).item()
+                # Use exponential decay to map distance to [0, 1]
+                # Assume typical distance scale is around 10-100
+                similarity = np.exp(-distance / 10.0)
+                return similarity
+            
+            elif self.similarity_metric == 'l2':
+                # L2 norm of difference, normalized
+                diff_norm = torch.norm(vec1 - vec2).item()
+                vec1_norm = torch.norm(vec1).item()
+                vec2_norm = torch.norm(vec2).item()
+                
+                # Normalize by vector magnitudes
+                avg_norm = (vec1_norm + vec2_norm) / 2.0
+                if avg_norm == 0:
+                    return 1.0 if diff_norm == 0 else 0.0
+                
+                normalized_diff = diff_norm / avg_norm
+                # Convert to similarity: smaller diff = higher similarity
+                similarity = 1.0 / (1.0 + normalized_diff)
+                return similarity
+            
+            else:
+                logger.warning(f"[LatentConsistencyScorer] Unknown similarity metric: {self.similarity_metric}")
+                return None
+        
+        except Exception as e:
+            logger.error(f"[LatentConsistencyScorer] Error computing similarity: {e}")
+            return None
+    
+    def _aggregate_similarities(self, similarities: List[float]) -> float:
+        """Aggregate pairwise similarities into a single consistency score.
+        
+        Args:
+            similarities: List of pairwise similarity scores
+            
+        Returns:
+            Aggregated consistency score in [0, 1]
+        """
+        if not similarities:
+            return 0.0
+        
+        if self.aggregation_method == 'mean':
+            # Average similarity
+            score = np.mean(similarities)
+        
+        elif self.aggregation_method == 'min':
+            # Minimum similarity (most conservative)
+            score = np.min(similarities)
+        
+        elif self.aggregation_method == 'max':
+            # Maximum similarity (most optimistic)
+            score = np.max(similarities)
+        
+        elif self.aggregation_method == 'median':
+            # Median similarity
+            score = np.median(similarities)
+        
+        else:
+            logger.warning(f"[LatentConsistencyScorer] Unknown aggregation method: {self.aggregation_method}, "
+                         f"using mean as fallback")
+            score = np.mean(similarities)
+        
+        # Ensure in [0, 1] range
+        return float(max(0.0, min(1.0, score)))
+    
+    def score_individual_paths(
+        self,
+        path_states: List[Any],
+        **kwargs
+    ) -> List[float]:
+        """Compute individual consistency scores for each path.
+        
+        For each path, computes its average similarity to all other paths in the group.
+        Paths that are more similar to the group consensus get higher scores.
+        
+        Args:
+            path_states: List of PathState objects to compare
+            **kwargs: Additional arguments (ignored)
+            
+        Returns:
+            List of consistency scores (one per path) in [0, 1]
+        """
+        logger.debug(f"[LatentConsistencyScorer] Computing individual consistency scores for {len(path_states)} paths")
+        
+        # Handle edge cases
+        if not path_states:
+            logger.warning("[LatentConsistencyScorer] No paths provided, returning empty list")
+            return []
+        
+        if len(path_states) == 1:
+            logger.debug("[LatentConsistencyScorer] Only 1 path provided, returning perfect score")
+            return [1.0]
+        
+        try:
+            # Extract latent representations from each path
+            latent_vectors = []
+            valid_indices = []  # Track which paths have valid latents
+            
+            for i, path_state in enumerate(path_states):
+                latent_vec = self._extract_latent_representation(path_state)
+                
+                if latent_vec is None:
+                    logger.warning(f"[LatentConsistencyScorer] Path {i} (id={getattr(path_state, 'path_id', 'N/A')}) "
+                                 f"has no valid latent representation, will assign neutral score")
+                    continue
+                
+                latent_vectors.append(latent_vec)
+                valid_indices.append(i)
+            
+            # Need at least 2 valid latents to compute meaningful consistency
+            if len(latent_vectors) < 2:
+                logger.warning(f"[LatentConsistencyScorer] Only {len(latent_vectors)} valid latents found, "
+                             f"returning neutral scores")
+                return [0.5] * len(path_states)
+            
+            # Compute pairwise similarity matrix
+            n = len(latent_vectors)
+            similarity_matrix = np.zeros((n, n))
+            
+            for i in range(n):
+                for j in range(n):
+                    if i == j:
+                        similarity_matrix[i, j] = 1.0  # Perfect self-similarity
+                    elif j > i:
+                        # Compute similarity
+                        sim = self._compute_similarity(latent_vectors[i], latent_vectors[j])
+                        if sim is not None:
+                            similarity_matrix[i, j] = sim
+                            similarity_matrix[j, i] = sim  # Symmetric
+                        else:
+                            similarity_matrix[i, j] = 0.5
+                            similarity_matrix[j, i] = 0.5
+            
+            # For each path, compute its average similarity to all OTHER paths
+            individual_scores_valid = []
+            for i in range(n):
+                # Get similarities to all other paths (exclude self)
+                other_similarities = [similarity_matrix[i, j] for j in range(n) if j != i]
+                
+                # Aggregate
+                if other_similarities:
+                    individual_score = self._aggregate_similarities(other_similarities)
+                else:
+                    individual_score = 0.5
+                
+                individual_scores_valid.append(individual_score)
+                logger.debug(f"[LatentConsistencyScorer] Path {valid_indices[i]} consistency with others: "
+                           f"{individual_score:.4f} (avg of {len(other_similarities)} comparisons)")
+            
+            # Build final scores list (including paths with no valid latents)
+            individual_scores = []
+            valid_idx = 0
+            for i in range(len(path_states)):
+                if i in valid_indices:
+                    individual_scores.append(individual_scores_valid[valid_idx])
+                    valid_idx += 1
+                else:
+                    # Path had no valid latent, assign neutral score
+                    individual_scores.append(0.5)
+            
+            logger.info(f"[LatentConsistencyScorer] Individual consistency scores computed: "
+                       f"min={min(individual_scores):.4f}, max={max(individual_scores):.4f}, "
+                       f"mean={np.mean(individual_scores):.4f}")
+            
+            return individual_scores
+        
+        except Exception as e:
+            logger.error(f"[LatentConsistencyScorer] Error computing individual scores: {e}", exc_info=True)
+            return [0.5] * len(path_states)
 
 
 class EnsembleScorer(BaseScorer):

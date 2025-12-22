@@ -16,7 +16,8 @@ from collections import Counter
 from .latent_mas import LatentMASMethod
 from .path_manager import PathState, PathManager
 from .graph_structure import ReasoningGraph, ReasoningNode
-from .scoring_metrics import EnsembleScorer, SelfConsistencyScorer, PerplexityScorer, VerificationScorer, HiddenStateQualityScorer
+from .scoring_metrics import EnsembleScorer, SelfConsistencyScorer, PerplexityScorer, VerificationScorer, \
+    HiddenStateQualityScorer, LatentConsistencyScorer
 from .pruning_strategies import TopKPruning, AdaptivePruning, DiversityAwarePruning, BudgetBasedPruning
 from .path_merging import PathMerger, WeightedMergeStrategy, AverageMergeStrategy, PathSimilarityDetector
 from .diversity_strategies import HybridDiversityStrategy, TemperatureDiversityStrategy, NoiseDiversityStrategy
@@ -129,10 +130,10 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         # Initialize scoring metrics
         if scoring_weights is None:
             scoring_weights = {
-                'self_consistency': 0.4,
-                'perplexity': 0.3,
-                'verification': 0.2,
-                'hidden_quality': 0.1,
+                'latent_consistency': 0.0,  # Default to fast latent-based consistency
+                'perplexity': 0.4,
+                'verification': 0.3,
+                'hidden_quality': 0.3,
             }
         
         # Create ensemble scorer and add individual scorers
@@ -148,14 +149,31 @@ class LatentMASMultiPathMethod(LatentMASMethod):
             self.ensemble_scorer.add_scorer('hidden_quality', hidden_quality_scorer, scoring_weights['hidden_quality'])
         
         if 'self_consistency' in scoring_weights:
+            # Text-based self-consistency (slower, requires decoding)
             self_consistency_scorer = SelfConsistencyScorer(model_wrapper=model)
             self.ensemble_scorer.add_scorer('self_consistency', self_consistency_scorer, scoring_weights['self_consistency'])
+            logger.info("[LatentMASMultiPathMethod] Using text-based self-consistency (slower)")
+        
+        if 'latent_consistency' in scoring_weights:
+            # Latent-based consistency (faster, no decoding required)
+            # Note: This will be computed at the path group level
+            latent_consistency_scorer = LatentConsistencyScorer(
+                similarity_metric='cosine',
+                aggregation_method='mean',
+                use_last_latent=True
+            )
+            self.latent_consistency_scorer = latent_consistency_scorer
+            self.latent_consistency_weight = scoring_weights['latent_consistency']
+            logger.info("[LatentMASMultiPathMethod] Using latent-based self-consistency (faster, no decoding)")
+        else:
+            self.latent_consistency_scorer = None
+            self.latent_consistency_weight = 0.0
         
         if 'verification' in scoring_weights:
             verification_scorer = VerificationScorer(model_wrapper=model)
             self.ensemble_scorer.add_scorer('verification', verification_scorer, scoring_weights['verification'])
         
-        logger.debug(f"[LatentMASMultiPathMethod] Initialized EnsembleScorer with weights: {scoring_weights}")
+        logger.info(f"[LatentMASMultiPathMethod] Initialized EnsembleScorer with weights: {scoring_weights}")
         
         # Initialize pruning strategy
         self.pruning_strategy = self._create_pruning_strategy(pruning_strategy)
@@ -421,6 +439,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     new_paths = []
                     for path_dict in path_dicts:
                         path_id = self.path_manager.next_path_id
+                        self.path_manager.next_path_id += 1
                         path_state = PathState(
                             path_id=path_id,
                             latent_history=path_dict['latent_history'],
@@ -434,13 +453,44 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     
                     # Score all paths
                     logger.info(f"[{agent.name}] Scoring {len(new_paths)} generated paths")
-                    for path in new_paths:
-                        score = self.ensemble_scorer.score(
+                    
+                    # Compute individual latent consistency scores for each path if enabled
+                    individual_consistency_scores = None
+                    if self.latent_consistency_scorer is not None and len(new_paths) > 1:
+                        logger.info(f"[{agent.name}] Computing individual latent consistency for {len(new_paths)} paths")
+                        individual_consistency_scores = self.latent_consistency_scorer.score_individual_paths(new_paths)
+                        logger.info(f"[{agent.name}] Individual consistency scores: "
+                                  f"min={min(individual_consistency_scores):.4f}, "
+                                  f"max={max(individual_consistency_scores):.4f}, "
+                                  f"mean={np.mean(individual_consistency_scores):.4f}")
+                    
+                    # Score each path individually
+                    for path_idx, path in enumerate(new_paths):
+                        # Get base score from ensemble scorer (without latent_consistency)
+                        base_score = self.ensemble_scorer.score(
                             path_state=path,
                             question=items[batch_idx]["question"],
                         )
-                        path.update_state(score=score)
-                        logger.info(f"[{agent.name}] Path {path.path_id} score: {score:.4f}")
+                        
+                        # Add individual latent consistency score if enabled
+                        if individual_consistency_scores is not None:
+                            path_consistency = individual_consistency_scores[path_idx]
+                            
+                            # Compute weighted combination
+                            # Normalize weights: ensemble_weight + latent_consistency_weight = 1.0
+                            ensemble_weight = 1.0 - self.latent_consistency_weight
+                            final_score = (base_score * ensemble_weight + 
+                                         path_consistency * self.latent_consistency_weight)
+                            
+                            path.metadata['base_score'] = base_score
+                            path.metadata['latent_consistency'] = path_consistency
+                            logger.info(f"[{agent.name}] Path {path.path_id}: base={base_score:.4f}, "
+                                      f"consistency={path_consistency:.4f}, final={final_score:.4f}")
+                        else:
+                            final_score = base_score
+                            logger.info(f"[{agent.name}] Path {path.path_id} score: {final_score:.4f}")
+                        
+                        path.update_state(score=final_score)
                         logger.debug(f"[{agent.name}] Path {path.path_id} metadata: {path.metadata}")
                     
                     # Prune low-quality paths
@@ -774,6 +824,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             
                             # Create path state
                             path_id = self.path_manager.next_path_id
+                            self.path_manager.next_path_id += 1
                             path_state = PathState(
                                 path_id=path_id,
                                 latent_history=[],
@@ -804,6 +855,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             
                             # Create path state
                             path_id = self.path_manager.next_path_id
+                            self.path_manager.next_path_id += 1
                             path_state = PathState(
                                 path_id=path_id,
                                 latent_history=[],
@@ -839,11 +891,32 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     
                     # Score paths (using simplified scoring for vLLM efficiency)
                     logger.debug(f"Scoring {len(batch_paths[batch_idx])} paths [vLLM]")
-                    for path in batch_paths[batch_idx]:
-                        # Use simplified scoring (perplexity + hidden quality only)
-                        score = 0.5  # Default score
-                        path.update_state(score=score)
-                        logger.debug(f"[LatentMASMultiPathMethod.run_batch_vllm] Path {path.path_id} score: {score:.4f}")
+                    
+                    # Compute individual latent consistency scores if enabled
+                    individual_consistency_scores = None
+                    if self.latent_consistency_scorer is not None and len(batch_paths[batch_idx]) > 1:
+                        logger.debug(f"Computing individual latent consistency for {len(batch_paths[batch_idx])} paths [vLLM]")
+                        individual_consistency_scores = self.latent_consistency_scorer.score_individual_paths(batch_paths[batch_idx])
+                        logger.debug(f"Individual consistency scores: min={min(individual_consistency_scores):.4f}, "
+                                   f"max={max(individual_consistency_scores):.4f} [vLLM]")
+                    
+                    # Score each path
+                    for path_idx, path in enumerate(batch_paths[batch_idx]):
+                        # Use simplified base scoring for vLLM
+                        base_score = 0.5  # Default score
+                        
+                        # Add individual latent consistency if enabled
+                        if individual_consistency_scores is not None:
+                            path_consistency = individual_consistency_scores[path_idx]
+                            ensemble_weight = 1.0 - self.latent_consistency_weight
+                            final_score = (base_score * ensemble_weight + 
+                                         path_consistency * self.latent_consistency_weight)
+                            path.metadata['latent_consistency'] = path_consistency
+                        else:
+                            final_score = base_score
+                        
+                        path.update_state(score=final_score)
+                        logger.debug(f"[LatentMASMultiPathMethod.run_batch_vllm] Path {path.path_id} score: {final_score:.4f}")
                     
                     # Prune low-quality paths
                     logger.debug(f"Pruning paths [vLLM]")

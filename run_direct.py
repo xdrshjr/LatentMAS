@@ -149,6 +149,16 @@ def main_direct():
             gold="48",
             solution="48"
         ),
+        create_question_dict(
+            question="A robe takes 2 bolts of blue fiber and half that much white fiber.  How many bolts in total does it take?",
+            gold="3",
+            solution="3"
+        ),
+        create_question_dict(
+            question="Josh decides to try flipping a house.  He buys a house for $80,000 and then puts in $50,000 in repairs.  This increased the value of the house by 150%.  How much profit did he make?",
+            gold="70000",
+            solution="70000"
+        ),
         # Add more questions here as needed
         # create_question_dict(
         #     question="Your question here",
@@ -171,7 +181,7 @@ def main_direct():
     args_dict = {
         # Core parameters
         "method": "latent_mas_multipath",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
-        "model_name": "Qwen/Qwen3-4B",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
+        "model_name": "Qwen/Qwen3-0.6B",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
         "max_samples": len(custom_questions),  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
         "prompt": "sequential",  # Options: "sequential", "hierarchical"
@@ -179,7 +189,7 @@ def main_direct():
         "split": "test",  # Split name (not used in custom mode, but required)
         
         # Generation parameters
-        "max_new_tokens": 12288,  # Maximum tokens to generate
+        "max_new_tokens": 1024,  # Maximum tokens to generate
         "latent_steps": 10,  # Number of latent steps (for latent_mas and latent_mas_multipath)
         "temperature": 0.6,  # Sampling temperature
         "top_p": 0.95,  # Top-p sampling parameter
@@ -191,10 +201,10 @@ def main_direct():
         "latent_space_realign": True,  # Latent space realignment
         
         # Multi-path specific parameters (for latent_mas_multipath)
-        "num_paths": 5,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
+        "num_paths": 10,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
         "enable_branching": True,  # Enable adaptive branching based on uncertainty
         "enable_merging": True,  # Enable path merging for efficiency (reduces redundant computation)
-        "pruning_strategy": "adaptive",  # Options: "topk", "adaptive", "diversity", "budget"
+        "pruning_strategy": "topk",  # Options: "topk", "adaptive", "diversity", "budget"
                                          # - "topk": Keep top-k paths by score (simple, fast)
                                          # - "adaptive": Adjust pruning rate by progress (recommended)
                                          # - "diversity": Balance score and diversity (good for exploration)
@@ -203,7 +213,7 @@ def main_direct():
                                  # Higher = only merge very similar paths, Lower = merge more aggressively
         "branch_threshold": 0.5,  # Uncertainty threshold for branching (0.0-1.0)
                                   # Higher = branch less often, Lower = branch more often
-        "diversity_strategy": "hybrid",  # Options: "temperature", "noise", "hybrid"
+        "diversity_strategy": "temperature",  # Options: "temperature", "noise", "hybrid"
                                         # - "temperature": Use different temperatures per path
                                         # - "noise": Add noise to hidden states
                                         # - "hybrid": Combine both strategies (recommended)
