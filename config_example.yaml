@@ -1,0 +1,35 @@
+# LatentMAS Multi-Path Configuration Example
+# This file demonstrates all available configuration options
+
+# Core multi-path parameters
+num_paths: 5                    # Number of parallel reasoning paths
+enable_branching: true          # Enable adaptive branching based on uncertainty
+enable_merging: true            # Enable path merging for efficiency
+pruning_strategy: adaptive      # Options: topk, adaptive, diversity, budget
+merge_threshold: 0.9            # Similarity threshold for path merging [0.0-1.0]
+branch_threshold: 0.5           # Uncertainty threshold for branching [0.0-1.0]
+diversity_strategy: hybrid      # Options: temperature, noise, hybrid
+
+# Scoring weights for ensemble scorer (must sum to ~1.0)
+scoring_weights:
+  self_consistency: 0.4         # Weight for self-consistency score
+  perplexity: 0.3               # Weight for perplexity-based score
+  verification: 0.2             # Weight for verification score
+  hidden_quality: 0.1           # Weight for hidden state quality
+
+# Generation parameters
+latent_steps: 10                # Number of latent thinking steps per path
+temperature: 0.7                # Sampling temperature
+top_p: 0.95                     # Nucleus sampling parameter
+max_new_tokens: 4096            # Maximum new tokens for generation
+generate_bs: 20                 # Batch size for generation
+
+# Pruning parameters
+pruning_keep_ratio: 0.5         # Ratio of paths to keep during pruning [0.0-1.0]
+pruning_min_paths: 2            # Minimum paths to keep after pruning
+pruning_max_paths: 10           # Maximum paths to maintain
+
+# Budget parameters (for budget-based pruning)
+max_compute_budget: 1000000.0   # Maximum computational budget
+cost_per_token: 1.0             # Cost per token for budget calculation
+

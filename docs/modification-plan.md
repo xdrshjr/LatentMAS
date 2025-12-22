@@ -11,7 +11,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 ### Phase 1: Core Infrastructure & Data Structures
 
 #### Task-1.1: Create Graph Data Structure Module
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/graph_structure.py` (NEW)  
 **Description**: Implement the core graph data structure to manage reasoning paths  
 **Details**:
@@ -26,7 +26,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for graph operations (add/remove nodes), DEBUG for traversal details
 
 #### Task-1.2: Create Path Management Module
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/path_manager.py` (NEW)  
 **Description**: Implement path tracking and management utilities  
 **Details**:
@@ -39,7 +39,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for path creation/deletion, DEBUG for path comparisons
 
 #### Task-1.3: Create Scoring Metrics Module
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/scoring_metrics.py` (NEW)  
 **Description**: Implement training-free evaluation metrics for path scoring  
 **Details**:
@@ -65,7 +65,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 ### Phase 2: Multi-Path Generation
 
 #### Task-2.1: Enhance ModelWrapper for Multi-Path Support
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `models.py` (MODIFY)  
 **Description**: Add multi-path latent generation capabilities  
 **Details**:
@@ -81,7 +81,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for multi-path generation start/end, DEBUG for each path generation
 
 #### Task-2.2: Implement Diversity Generation Strategies
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/diversity_strategies.py` (NEW)  
 **Description**: Implement strategies to generate diverse reasoning paths  
 **Details**:
@@ -101,7 +101,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 ### Phase 3: Scoring and Evaluation
 
 #### Task-3.1: Implement Self-Consistency Scorer
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/scoring_metrics.py` (MODIFY)  
 **Description**: Complete implementation of self-consistency scoring  
 **Details**:
@@ -113,7 +113,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: DEBUG for each sample answer, INFO for final consistency score
 
 #### Task-3.2: Implement Perplexity-Based Scorer
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/scoring_metrics.py` (MODIFY)  
 **Description**: Complete implementation of perplexity-based scoring  
 **Details**:
@@ -125,7 +125,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: DEBUG for per-step perplexity, INFO for average perplexity
 
 #### Task-3.3: Implement Verification Scorer
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/scoring_metrics.py` (MODIFY)  
 **Description**: Complete implementation of verification-based scoring  
 **Details**:
@@ -137,7 +137,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: DEBUG for verification prompts/responses, INFO for verification scores
 
 #### Task-3.4: Implement Hidden State Quality Scorer
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/scoring_metrics.py` (MODIFY)  
 **Description**: Complete implementation of hidden state quality metrics  
 **Details**:
@@ -149,7 +149,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: DEBUG for individual quality metrics, INFO for combined score
 
 #### Task-3.5: Implement Ensemble Scorer
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/scoring_metrics.py` (MODIFY)  
 **Description**: Create weighted ensemble of all scoring metrics  
 **Details**:
@@ -165,7 +165,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 ### Phase 4: Pruning Strategies
 
 #### Task-4.1: Implement Basic Pruning
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/pruning_strategies.py` (NEW)  
 **Description**: Implement basic top-k pruning strategy  
 **Details**:
@@ -179,7 +179,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for pruning decisions (how many removed), DEBUG for individual path scores
 
 #### Task-4.2: Implement Adaptive Pruning
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/pruning_strategies.py` (MODIFY)  
 **Description**: Implement adaptive pruning based on progress  
 **Details**:
@@ -191,7 +191,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for adaptive pruning rate, DEBUG for pruning calculations
 
 #### Task-4.3: Implement Diversity-Aware Pruning
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/pruning_strategies.py` (MODIFY)  
 **Description**: Implement pruning that preserves path diversity  
 **Details**:
@@ -203,7 +203,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for diversity metrics, DEBUG for pairwise similarity calculations
 
 #### Task-4.4: Implement Budget-Based Pruning
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/pruning_strategies.py` (MODIFY)  
 **Description**: Implement pruning based on computational budget  
 **Details**:
@@ -218,7 +218,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 ### Phase 5: Path Merging
 
 #### Task-5.1: Implement Path Similarity Detection
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/path_merging.py` (NEW)  
 **Description**: Detect similar paths for merging  
 **Details**:
@@ -229,7 +229,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: DEBUG for similarity calculations, INFO for merge candidates
 
 #### Task-5.2: Implement Path Merging Operations
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/path_merging.py` (MODIFY)  
 **Description**: Implement actual path merging logic  
 **Details**:
@@ -241,7 +241,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for merge operations, DEBUG for merge details
 
 #### Task-5.3: Implement Merge Strategy Selection
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/path_merging.py` (MODIFY)  
 **Description**: Implement intelligent merge strategy selection  
 **Details**:
@@ -257,7 +257,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 ### Phase 6: Enhanced LatentMAS Method
 
 #### Task-6.1: Create Multi-Path LatentMAS Method
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/latent_mas_multipath.py` (NEW)  
 **Description**: Create new method class with multi-path capabilities  
 **Details**:
@@ -273,7 +273,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for configuration, DEBUG for method initialization
 
 #### Task-6.2: Implement Multi-Path Agent Processing
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/latent_mas_multipath.py` (MODIFY)  
 **Description**: Implement multi-path processing for each agent  
 **Details**:
@@ -288,7 +288,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for each agent's path processing, DEBUG for path state changes
 
 #### Task-6.3: Implement Multi-Path Judger Aggregation
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/latent_mas_multipath.py` (MODIFY)  
 **Description**: Implement judger that aggregates multiple paths  
 **Details**:
@@ -301,7 +301,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for aggregation strategy, DEBUG for per-path judger results
 
 #### Task-6.4: Implement Uncertainty-Based Branching
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/latent_mas_multipath.py` (MODIFY)  
 **Description**: Implement adaptive branching based on uncertainty  
 **Details**:
@@ -312,7 +312,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for branching decisions, DEBUG for uncertainty calculations
 
 #### Task-6.5: Add vLLM Support for Multi-Path
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/latent_mas_multipath.py` (MODIFY)  
 **Description**: Extend vLLM support to multi-path processing  
 **Details**:
@@ -327,7 +327,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 ### Phase 7: Configuration and Integration
 
 #### Task-7.1: Add Command-Line Arguments
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `run.py` (MODIFY)  
 **Description**: Add command-line arguments for multi-path features  
 **Details**:
@@ -342,7 +342,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for parsed arguments, DEBUG for argument validation
 
 #### Task-7.2: Update Method Factory
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `run.py` (MODIFY)  
 **Description**: Update method initialization to support multi-path  
 **Details**:
@@ -353,7 +353,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for method selection, DEBUG for method configuration
 
 #### Task-7.3: Create Configuration File Support
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `config.py` (NEW)  
 **Description**: Add support for configuration files  
 **Details**:
@@ -369,7 +369,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 ### Phase 8: Optimization and Utilities
 
 #### Task-8.1: Implement KV-Cache Optimization
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/cache_optimization.py` (NEW)  
 **Description**: Optimize KV-cache usage for multi-path  
 **Details**:
@@ -381,7 +381,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for cache operations, DEBUG for cache hit/miss rates
 
 #### Task-8.2: Implement Batch Processing Optimization
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/batch_optimization.py` (NEW)  
 **Description**: Optimize batch processing for multiple paths  
 **Details**:
@@ -392,7 +392,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for batch composition, DEBUG for optimization details
 
 #### Task-8.3: Add Performance Profiling
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `utils.py` (MODIFY)  
 **Description**: Add profiling utilities for performance analysis  
 **Details**:
@@ -404,7 +404,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for performance summaries, DEBUG for detailed profiling
 
 #### Task-8.4: Implement Checkpointing
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `methods/checkpointing.py` (NEW)  
 **Description**: Add checkpointing for long-running experiments  
 **Details**:
@@ -420,7 +420,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 ### Phase 9: Visualization and Analysis
 
 #### Task-9.1: Implement Graph Visualization
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `visualization/graph_viz.py` (NEW)  
 **Description**: Create visualization tools for reasoning graphs  
 **Details**:
@@ -432,7 +432,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for visualization generation, DEBUG for rendering details
 
 #### Task-9.2: Implement Path Analysis Tools
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `visualization/path_analysis.py` (NEW)  
 **Description**: Create tools for analyzing path behavior  
 **Details**:
@@ -444,7 +444,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: INFO for analysis results, DEBUG for calculation details
 
 #### Task-9.3: Implement Logging Dashboard
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `visualization/dashboard.py` (NEW)  
 **Description**: Create real-time monitoring dashboard  
 **Details**:
@@ -512,7 +512,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 ### Phase 11: Documentation
 
 #### Task-11.1: Update README
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `README.md` (MODIFY)  
 **Description**: Update README with multi-path features  
 **Details**:
@@ -524,7 +524,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: N/A
 
 #### Task-11.2: Create Multi-Path User Guide
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `docs/multipath-guide.md` (NEW)  
 **Description**: Comprehensive guide for multi-path features  
 **Details**:
@@ -536,7 +536,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: N/A
 
 #### Task-11.3: Create API Documentation
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `docs/api-reference.md` (NEW)  
 **Description**: API documentation for new modules  
 **Details**:
@@ -548,7 +548,7 @@ This document outlines the detailed modification plan to enhance the LatentMAS m
 - **Logging**: N/A
 
 #### Task-11.4: Create Experiment Guide
-**Status**: ⬜ Pending  
+**Status**: ✅ Complete  
 **File**: `docs/experiment-guide.md` (NEW)  
 **Description**: Guide for running experiments  
 **Details**:
@@ -781,7 +781,62 @@ class MyClass:
 
 ---
 
-**Document Version**: 1.0  
+## Phase 12: Logging and Progress Bar Enhancement
+
+### Task-12.1: Enhanced Logging System
+**Status**: ✅ Complete  
+**File**: `logging_config.py` (NEW)  
+**Description**: Implement improved logging with module-specific formatting and reduced console verbosity  
+**Details**:
+- Create `ColoredFormatter` class with ANSI color codes for different modules
+- Implement `ProgressBarHandler` for compatibility with progress bars
+- Add `setup_logging()` function with separate console and file logging levels
+- Configure module-specific log levels to reduce noise from verbose modules
+- Support colored output with module prefixes (e.g., `[MultiPath]`, `[Scoring]`, `[Pruning]`)
+- Automatic log file creation with standardized naming
+- **Logging**: Clean, color-coded console output with detailed file logging
+
+### Task-12.2: Progress Bar System
+**Status**: ✅ Complete  
+**File**: `progress_utils.py` (NEW)  
+**Description**: Implement progress bar system that stays at bottom while logs scroll above  
+**Details**:
+- Create `ProgressBarManager` class for managing progress bars
+- Support main progress bar showing overall processing status
+- Support sub-progress bars for nested operations
+- Integration with tqdm for smooth progress display
+- Update progress bar with real-time accuracy metrics
+- Context manager support for automatic cleanup
+- **Features**: Persistent bottom progress bar with live accuracy updates
+
+### Task-12.3: Update run.py with New Logging
+**Status**: ✅ Complete  
+**File**: `run.py` (MODIFY)  
+**Description**: Integrate new logging and progress bar system into main execution  
+**Details**:
+- Replace basic logging.basicConfig with enhanced setup_logging()
+- Create progress bar at start of processing
+- Update progress bar after each batch with accuracy metrics
+- Reduce print statements, use logger instead
+- Move detailed output to DEBUG level
+- Clean final results display
+- **Impact**: Much cleaner console output with progress bar at bottom
+
+### Task-12.4: Update Method Logging Levels
+**Status**: ✅ Complete  
+**File**: `methods/latent_mas_multipath.py` (MODIFY)  
+**Description**: Adjust logging levels in methods to reduce console verbosity  
+**Details**:
+- Change verbose INFO logs to DEBUG level
+- Keep important milestones at INFO level (agent processing, pruning/merging results)
+- Simplify log messages, remove redundant prefixes
+- Consistent formatting across all methods
+- Better distinction between important events and detailed debugging
+- **Impact**: ~70% reduction in console log volume while maintaining visibility of key events
+
+---
+
+**Document Version**: 1.1  
 **Last Updated**: 2025-12-22  
-**Status**: Ready for Implementation
+**Status**: Phase 12 Complete - Logging Enhancement Implemented
 

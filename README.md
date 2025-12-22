@@ -74,7 +74,7 @@ compared to standard Text-MAS or chain-of-thought baselines.
 
 ## 🛠️ Getting Started
 
-This repository provides all code for reproducing LatentMAS, TextMAS, and baseline single-agent experiments across GSM8K, AIME24/25, GPQA, ARC-Easy/Challenge, MBPP+, HumanEval+, and MedQA.
+This repository provides all code for reproducing LatentMAS, TextMAS, baseline single-agent experiments, and the enhanced **LatentMAS Multi-Path** method across GSM8K, AIME24/25, GPQA, ARC-Easy/Challenge, MBPP+, HumanEval+, and MedQA.
 
 ### ⚙️ Setup Environment Variables
 
@@ -117,17 +117,35 @@ cd LatentMAS
 
 ```
 LatentMAS/
-│── run.py                 # Main entry for experiments
-│── models.py              # Wrapper for HF + vLLM + latent realignment
+│── run.py                           # Main entry for experiments
+│── models.py                        # Wrapper for HF + vLLM + latent realignment
 │── methods/
-│   ├── baseline.py        # Single-agent baseline
-│   ├── text_mas.py        # Token-space multi-agent method
-│   └── latent_mas.py      # Latent-space multi-agent (our method)
-│── prompts.py             # Prompt constructors
-│── data.py                # Dataset loaders
-│── data/                  # Provided data + figures (We give medqa.json as an example here)
-│── utils.py               # Answer parsing / timeout / helpers
-│── example_logs/          # Example logs from LatentMAS
+│   ├── baseline.py                  # Single-agent baseline
+│   ├── text_mas.py                  # Token-space multi-agent method
+│   ├── latent_mas.py                # Latent-space multi-agent (our method)
+│   ├── latent_mas_multipath.py      # Enhanced multi-path LatentMAS
+│   ├── graph_structure.py           # Graph data structures for multi-path
+│   ├── path_manager.py              # Path tracking and management
+│   ├── scoring_metrics.py           # Training-free path evaluation metrics
+│   ├── pruning_strategies.py        # Intelligent path pruning
+│   ├── path_merging.py              # Path similarity detection and merging
+│   ├── diversity_strategies.py      # Diverse path generation strategies
+│   ├── cache_optimization.py        # KV-cache optimization
+│   ├── batch_optimization.py        # Batch processing optimization
+│   └── checkpointing.py             # Checkpointing for long experiments
+│── prompts.py                       # Prompt constructors
+│── data.py                          # Dataset loaders
+│── data/                            # Provided data + figures
+│── utils.py                         # Answer parsing / timeout / helpers
+│── visualization/                   # Visualization tools for multi-path
+│   ├── graph_viz.py                 # Graph visualization
+│   ├── path_analysis.py             # Path analysis tools
+│   └── dashboard.py                 # Real-time monitoring dashboard
+│── docs/                            # Documentation
+│   ├── multipath-guide.md           # Multi-path user guide
+│   ├── api-reference.md             # API documentation
+│   └── experiment-guide.md          # Experiment guide
+│── example_logs/                    # Example logs from LatentMAS
 │── requirements.txt
 ```
 
@@ -165,6 +183,78 @@ python run.py --method latent_mas --model_name Qwen/Qwen3-14B --task gsm8k --pro
 ```bash
 python run.py --method latent_mas --model_name Qwen/Qwen3-14B --task gsm8k --prompt sequential --max_samples -1 --latent_space_realign --max_new_tokens 2048
 ```
+
+### 🔹 **LatentMAS Multi-Path (enhanced with graph-structured reasoning)**
+
+The multi-path method extends LatentMAS with multiple parallel reasoning paths, training-free evaluation metrics, intelligent pruning, and path merging:
+
+```bash
+python run.py --method latent_mas_multipath --model_name Qwen/Qwen3-14B --task gsm8k --prompt sequential --max_samples -1 --max_new_tokens 2048
+```
+
+#### Multi-Path Configuration Options:
+
+* **`--num_paths`** (default: 5)
+  Number of parallel reasoning paths to explore
+  
+* **`--pruning_strategy`** (choices: topk, adaptive, diversity, budget)
+  Strategy for pruning low-quality paths
+  - `topk`: Keep top-k paths by score
+  - `adaptive`: More aggressive early, less aggressive later
+  - `diversity`: Balance score and diversity
+  - `budget`: Prune based on computational budget
+  
+* **`--diversity_strategy`** (choices: temperature, noise, hybrid)
+  Strategy for generating diverse paths
+  - `temperature`: Use different temperatures
+  - `noise`: Add Gaussian noise to hidden states
+  - `hybrid`: Combine multiple strategies
+  
+* **`--enable_branching`**
+  Enable adaptive branching based on uncertainty
+  
+* **`--enable_merging`**
+  Enable merging of similar paths to reduce redundancy
+  
+* **`--merge_threshold`** (default: 0.9)
+  Cosine similarity threshold for path merging
+  
+* **`--branch_threshold`** (default: 0.5)
+  Uncertainty threshold for adaptive branching
+
+#### Configuration Presets:
+
+For convenience, use preset configurations optimized for different scenarios:
+
+```bash
+# List available presets
+python run.py --list_presets
+
+# Use a preset (conservative, balanced, aggressive, fast, quality)
+python run.py --method latent_mas_multipath --model_name Qwen/Qwen3-14B --task gsm8k --config_preset balanced --max_samples -1 --max_new_tokens 2048
+```
+
+#### Example: Aggressive Multi-Path Configuration
+
+```bash
+python run.py --method latent_mas_multipath \
+  --model_name Qwen/Qwen3-14B \
+  --task gsm8k \
+  --prompt sequential \
+  --num_paths 10 \
+  --pruning_strategy diversity \
+  --diversity_strategy hybrid \
+  --enable_branching \
+  --enable_merging \
+  --merge_threshold 0.85 \
+  --max_samples -1 \
+  --max_new_tokens 2048
+```
+
+For detailed documentation, see:
+- [Multi-Path User Guide](docs/multipath-guide.md)
+- [API Reference](docs/api-reference.md)
+- [Experiment Guide](docs/experiment-guide.md)
 
 
 ## 📘 Example Logs
@@ -213,11 +303,46 @@ CUDA_VISIBLE_DEVICES=0,1 python run.py --method latent_mas --model_name Qwen/Qwe
   --device2 cuda:1
 ```
 
+### 🔹 LatentMAS Multi-Path with vLLM
+
+The multi-path method also supports vLLM for accelerated inference:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 python run.py --method latent_mas_multipath --model_name Qwen/Qwen3-14B --task gsm8k --prompt sequential --max_samples -1 --max_new_tokens 2048 \
+  --use_vllm \
+  --use_second_HF_model \
+  --enable_prefix_caching \
+  --device2 cuda:1 \
+  --num_paths 5 \
+  --pruning_strategy adaptive
+```
+
 **📍Important Note:**
 
 > vLLM does **not** officially support modifying KV-cache or prompting via latent embeddings.
 > We modify the partial inner package inside vLLM backend for our method implementation.
 > Note minor numeric differences may arise compared to offical HF backend due to different decoding (generation) strategies. Please Use the HF backend to reproduce the official published results.
+
+## 🎯 Multi-Path Performance Considerations
+
+The multi-path method provides improved accuracy at the cost of increased computation:
+
+### Computational Cost
+- **Memory**: Approximately `num_paths` × single-path memory usage
+- **Time**: With pruning and merging, typically 2-3× single-path time for 5 paths
+- **Optimization**: Use `--enable_merging` and aggressive pruning to reduce costs
+
+### When to Use Multi-Path
+- **Complex reasoning tasks**: Math, code generation, multi-step reasoning
+- **High-stakes applications**: Where accuracy is more important than speed
+- **Sufficient compute**: When you have GPU memory for multiple paths
+
+### Performance Tips
+1. Start with `--config_preset balanced` for a good accuracy/speed trade-off
+2. Use `--pruning_strategy adaptive` to automatically adjust pruning rate
+3. Enable `--enable_merging` to reduce redundant computation
+4. For faster inference, reduce `--num_paths` to 3
+5. For maximum quality, use `--config_preset quality` with `--num_paths 10`
 
 ## 🌐 Awesome Works based on LatentMAS
 

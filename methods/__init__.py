@@ -17,4 +17,32 @@ def default_agents() -> List[Agent]:
     ]
 
 
-__all__ = ["Agent", "default_agents"]
+# Import path merging components
+from .path_merging import (
+    PathSimilarityDetector,
+    MergeStrategy,
+    AverageMergeStrategy,
+    WeightedMergeStrategy,
+    SelectiveMergeStrategy,
+    PathMerger,
+    MergeCandidate,
+    MergeStatistics,
+)
+
+# Import multi-path method
+from .latent_mas_multipath import LatentMASMultiPathMethod
+
+
+__all__ = [
+    "Agent",
+    "default_agents",
+    "PathSimilarityDetector",
+    "MergeStrategy",
+    "AverageMergeStrategy",
+    "WeightedMergeStrategy",
+    "SelectiveMergeStrategy",
+    "PathMerger",
+    "MergeCandidate",
+    "MergeStatistics",
+    "LatentMASMultiPathMethod",
+]

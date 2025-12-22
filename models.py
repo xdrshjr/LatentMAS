@@ -2,7 +2,8 @@ import os
 import csv
 import torch
 import matplotlib.pyplot as plt
-from typing import Dict, List, Optional, Tuple
+import logging
+from typing import Dict, List, Optional, Tuple, Any
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 try:
@@ -10,6 +11,9 @@ try:
     _HAS_VLLM = True
 except ImportError:
     _HAS_VLLM = False
+
+# Logger setup
+logger = logging.getLogger(__name__)
 
 
 def _ensure_pad_token(tokenizer: AutoTokenizer) -> None:
@@ -413,4 +417,315 @@ class ModelWrapper:
             curr_output_embedding.append(latent_embed.detach())
 
         return past, torch.cat(curr_output_embedding, dim=1) # Output input embeddings
+    
+    @torch.no_grad()
+    def generate_diverse_latent_paths(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        *,
+        num_paths: int = 5,
+        latent_steps: int = 10,
+        diversity_strategy: Optional[Any] = None,
+        past_key_values: Optional[Tuple] = None,
+    ) -> List[Dict[str, Any]]:
+        """Generate multiple diverse latent reasoning paths.
+        
+        This method generates multiple reasoning paths with diversity to explore
+        different reasoning trajectories in the latent space.
+        
+        Args:
+            input_ids: Input token IDs [B, seq_len]
+            attention_mask: Attention mask [B, seq_len]
+            num_paths: Number of diverse paths to generate
+            latent_steps: Number of latent thinking steps per path
+            diversity_strategy: Strategy for generating diversity (optional)
+            past_key_values: Optional past KV cache to continue from
+            
+        Returns:
+            List of dictionaries, each containing:
+                - 'path_id': Path identifier
+                - 'latent_history': List of latent vectors
+                - 'hidden_states': Final hidden states
+                - 'kv_cache': Final KV cache
+                - 'metadata': Additional information about the path
+        """
+        logger.info(f"[ModelWrapper.generate_diverse_latent_paths] Generating {num_paths} diverse paths "
+                   f"with {latent_steps} latent steps each")
+        
+        if input_ids.dim() != 2:
+            raise ValueError("input_ids must be 2D with shape [batch, seq_len]")
+        
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids, device=self.device)
+        else:
+            attention_mask = attention_mask.to(self.device)
+        
+        # Import diversity strategy here to avoid circular imports
+        if diversity_strategy is None:
+            from methods.diversity_strategies import HybridDiversityStrategy
+            diversity_strategy = HybridDiversityStrategy()
+            logger.debug("[ModelWrapper.generate_diverse_latent_paths] Using default HybridDiversityStrategy")
+        
+        paths = []
+        
+        for path_idx in range(num_paths):
+            logger.info(f"[Path Generation] Starting path {path_idx + 1}/{num_paths}")
+            
+            # Get temperature for this path
+            temperature = diversity_strategy.get_temperature(path_idx, num_paths)
+            logger.debug(f"[Path Generation] Path {path_idx + 1} temperature: {temperature:.4f}")
+            
+            # Generate initial hidden states
+            if past_key_values is not None:
+                past_len = _past_length(past_key_values)
+                if past_len > 0:
+                    past_mask = torch.ones(
+                        (attention_mask.shape[0], past_len),
+                        dtype=attention_mask.dtype,
+                        device=attention_mask.device,
+                    )
+                    full_attention_mask = torch.cat([past_mask, attention_mask], dim=-1)
+                else:
+                    full_attention_mask = attention_mask
+            else:
+                full_attention_mask = attention_mask
+            
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=full_attention_mask,
+                past_key_values=past_key_values,
+                use_cache=True,
+                output_hidden_states=True,
+                return_dict=True,
+            )
+            
+            past = outputs.past_key_values
+            last_hidden = outputs.hidden_states[-1][:, -1, :]
+            
+            # Apply diversity strategy to initial hidden state
+            last_hidden = diversity_strategy.apply(
+                last_hidden,
+                path_idx,
+                num_paths
+            )
+            
+            # Track latent history for this path
+            latent_history = []
+            
+            # Generate latent steps
+            for step in range(latent_steps):
+                logger.debug(f"[Path Generation] Path {path_idx + 1}, latent step {step + 1}/{latent_steps}")
+                
+                # Apply latent realignment
+                source_model = self.HF_model if hasattr(self, "HF_model") else self.model
+                latent_vec = self._apply_latent_realignment(last_hidden, source_model)
+                
+                # Log latent vector statistics
+                latent_norm = latent_vec.norm(dim=-1).mean().item()
+                logger.debug(f"[Path Generation] Path {path_idx + 1}, step {step + 1}: latent norm = {latent_norm:.4f}")
+                
+                # Store latent vector
+                latent_history.append(latent_vec.detach().clone())
+                
+                # Continue generation with latent vector
+                latent_embed = latent_vec.unsqueeze(1)
+                past_len = _past_length(past)
+                latent_mask = torch.ones(
+                    (latent_embed.shape[0], past_len + 1),
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                
+                outputs = self.model(
+                    inputs_embeds=latent_embed,
+                    attention_mask=latent_mask,
+                    past_key_values=past,
+                    use_cache=True,
+                    output_hidden_states=True,
+                    return_dict=True,
+                )
+                
+                past = outputs.past_key_values
+                last_hidden = outputs.hidden_states[-1][:, -1, :]
+            
+            # Store path information
+            path_info = {
+                'path_id': path_idx,
+                'latent_history': latent_history,
+                'hidden_states': last_hidden.detach().clone(),
+                'kv_cache': past,
+                'metadata': {
+                    'temperature': temperature,
+                    'latent_steps': latent_steps,
+                    'diversity_strategy': diversity_strategy.__class__.__name__,
+                }
+            }
+            paths.append(path_info)
+            
+            # Log path completion with statistics
+            hidden_norm = last_hidden.norm(dim=-1).mean().item()
+            logger.info(f"[Path Generation] Completed path {path_idx + 1}/{num_paths} - final hidden norm: {hidden_norm:.4f}")
+            logger.debug(f"[Path Generation] Path {path_idx + 1} metadata: {path_info['metadata']}")
+        
+        logger.info(f"[ModelWrapper.generate_diverse_latent_paths] Generated {len(paths)} diverse paths")
+        return paths
+    
+    @torch.no_grad()
+    def generate_latent_with_branching(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        *,
+        num_branches: int = 3,
+        latent_steps: int = 10,
+        diversity_strategy: Optional[Any] = None,
+        past_key_values: Optional[Tuple] = None,
+    ) -> List[Dict[str, Any]]:
+        """Generate multiple latent continuations from an existing state.
+        
+        This method branches from an existing KV cache state to generate
+        multiple diverse continuations. Useful for adaptive branching during
+        multi-path reasoning.
+        
+        Args:
+            input_ids: Input token IDs [B, seq_len]
+            attention_mask: Attention mask [B, seq_len]
+            num_branches: Number of branches to create
+            latent_steps: Number of latent steps for each branch
+            diversity_strategy: Strategy for generating diversity
+            past_key_values: KV cache to branch from (required)
+            
+        Returns:
+            List of branch dictionaries with latent histories and states
+        """
+        logger.info(f"[ModelWrapper.generate_latent_with_branching] Creating {num_branches} branches "
+                   f"with {latent_steps} steps each")
+        
+        if past_key_values is None:
+            logger.warning("[ModelWrapper.generate_latent_with_branching] No past_key_values provided, "
+                         "falling back to generate_diverse_latent_paths")
+            return self.generate_diverse_latent_paths(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                num_paths=num_branches,
+                latent_steps=latent_steps,
+                diversity_strategy=diversity_strategy,
+                past_key_values=None,
+            )
+        
+        if input_ids.dim() != 2:
+            raise ValueError("input_ids must be 2D with shape [batch, seq_len]")
+        
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids, device=self.device)
+        else:
+            attention_mask = attention_mask.to(self.device)
+        
+        # Import diversity strategy
+        if diversity_strategy is None:
+            from methods.diversity_strategies import NoiseDiversityStrategy
+            diversity_strategy = NoiseDiversityStrategy(noise_scale=0.1)
+            logger.debug("[ModelWrapper.generate_latent_with_branching] Using default NoiseDiversityStrategy")
+        
+        # Get current hidden state from the branching point
+        past_len = _past_length(past_key_values)
+        if past_len > 0:
+            past_mask = torch.ones(
+                (attention_mask.shape[0], past_len),
+                dtype=attention_mask.dtype,
+                device=attention_mask.device,
+            )
+            full_attention_mask = torch.cat([past_mask, attention_mask], dim=-1)
+        else:
+            full_attention_mask = attention_mask
+        
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=full_attention_mask,
+            past_key_values=past_key_values,
+            use_cache=True,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        
+        base_hidden = outputs.hidden_states[-1][:, -1, :]
+        base_past = outputs.past_key_values
+        
+        branches = []
+        
+        for branch_idx in range(num_branches):
+            logger.info(f"[Branching] Creating branch {branch_idx + 1}/{num_branches}")
+            
+            # Apply diversity to create different branch starting points
+            branch_hidden = diversity_strategy.apply(
+                base_hidden.clone(),
+                branch_idx,
+                num_branches
+            )
+            logger.debug(f"[Branching] Branch {branch_idx + 1} divergence applied")
+            
+            # Note: KV cache cannot be easily cloned, so we'll reuse base_past
+            # In practice, each branch will diverge as it generates new tokens
+            past = base_past
+            last_hidden = branch_hidden
+            
+            latent_history = []
+            
+            # Generate latent steps for this branch
+            for step in range(latent_steps):
+                logger.debug(f"[Branching] Branch {branch_idx + 1}, latent step {step + 1}/{latent_steps}")
+                
+                # Apply latent realignment
+                source_model = self.HF_model if hasattr(self, "HF_model") else self.model
+                latent_vec = self._apply_latent_realignment(last_hidden, source_model)
+                
+                # Log latent statistics
+                latent_norm = latent_vec.norm(dim=-1).mean().item()
+                logger.debug(f"[Branching] Branch {branch_idx + 1}, step {step + 1}: latent norm = {latent_norm:.4f}")
+                
+                latent_history.append(latent_vec.detach().clone())
+                
+                # Continue generation
+                latent_embed = latent_vec.unsqueeze(1)
+                past_len = _past_length(past)
+                latent_mask = torch.ones(
+                    (latent_embed.shape[0], past_len + 1),
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                
+                outputs = self.model(
+                    inputs_embeds=latent_embed,
+                    attention_mask=latent_mask,
+                    past_key_values=past,
+                    use_cache=True,
+                    output_hidden_states=True,
+                    return_dict=True,
+                )
+                
+                past = outputs.past_key_values
+                last_hidden = outputs.hidden_states[-1][:, -1, :]
+            
+            # Store branch information
+            branch_info = {
+                'branch_id': branch_idx,
+                'latent_history': latent_history,
+                'hidden_states': last_hidden.detach().clone(),
+                'kv_cache': past,
+                'metadata': {
+                    'latent_steps': latent_steps,
+                    'diversity_strategy': diversity_strategy.__class__.__name__,
+                    'branched_from_past_length': _past_length(base_past),
+                }
+            }
+            branches.append(branch_info)
+            
+            # Log branch completion
+            hidden_norm = last_hidden.norm(dim=-1).mean().item()
+            logger.info(f"[Branching] Completed branch {branch_idx + 1}/{num_branches} - final hidden norm: {hidden_norm:.4f}")
+            logger.debug(f"[Branching] Branch {branch_idx + 1} metadata: {branch_info['metadata']}")
+        
+        logger.info(f"[ModelWrapper.generate_latent_with_branching] Created {len(branches)} branches")
+        return branches
 
