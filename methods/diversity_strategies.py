@@ -5,6 +5,7 @@ during multi-path exploration, ensuring paths explore different reasoning trajec
 """
 
 import logging
+import random
 from typing import List, Optional, Dict, Any
 from abc import ABC, abstractmethod
 import torch
@@ -57,28 +58,29 @@ class DiversityStrategy(ABC):
     def get_temperature(self, path_index: int, total_paths: int) -> float:
         """Get temperature for a specific path based on baseline temperature.
         
-        Generates a series of temperatures centered around the baseline temperature.
+        Generates randomized temperatures centered around the baseline temperature.
         The temperature range is: [base_temperature - 0.3, base_temperature + 0.3]
         
         Args:
-            path_index: Index of current path
+            path_index: Index of current path (used for logging only, not for calculation)
             total_paths: Total number of paths
             
         Returns:
             Temperature value for this path
         """
         if total_paths == 1:
+            logger.debug(f"[DiversityStrategy] Single path, using base_temperature={self.base_temperature:.3f}")
             return self.base_temperature
         
-        # Generate temperature series: base_temp ± 0.3
-        # For path 0: base_temp - 0.3
-        # For last path: base_temp + 0.3
+        # Generate random temperature within range: base_temp ± 0.3
+        # This breaks the monotonic pattern and ensures diversity is not index-dependent
         temp_range = 0.6  # Total range: ±0.3
-        ratio = path_index / max(1, total_paths - 1)
-        temperature = (self.base_temperature - 0.3) + temp_range * ratio
+        random_offset = random.uniform(-0.3, 0.3)
+        temperature = self.base_temperature + random_offset
         
         logger.debug(f"[DiversityStrategy] Path {path_index}/{total_paths}: "
-                    f"base_temp={self.base_temperature:.3f}, generated_temp={temperature:.3f}")
+                    f"base_temp={self.base_temperature:.3f}, random_offset={random_offset:.3f}, "
+                    f"generated_temp={temperature:.3f}")
         
         return temperature
 
@@ -135,34 +137,37 @@ class TemperatureDiversityStrategy(DiversityStrategy):
         Returns:
             Hidden states with temperature-scaled perturbation
         """
+        # Note: We no longer use a deterministic path to avoid bias in consistency scoring
+        # All paths receive random perturbations, but with varying scales (including very small ones)
+        logger.debug(f"[TemperatureDiversityStrategy] Path {path_index}/{total_paths}: applying random perturbation")
+
+        # Get temperature (now randomized, not index-based)
         temp = kwargs.get('temperature', self.get_temperature(path_index, total_paths))
         logger.debug(f"[TemperatureDiversityStrategy] Path {path_index}/{total_paths}: temperature={temp:.3f}")
-
-        # Path 0 is deterministic
-        if path_index == 0:
-            return hidden_states
 
         step = kwargs.get('step', 0)
         total_steps = kwargs.get('total_steps', 1)
 
-        # Temperature scaling
-        min_temp = self.base_temperature - 0.3
-        temp_normalized = (temp - min_temp) / self.temp_range if self.temp_range > 0 else 0.0
-        temp_normalized = max(0.0, min(1.0, temp_normalized))
-
+        # Random noise scale with very small minimum to include near-deterministic paths
+        # This breaks the monotonic pattern while maintaining some stability
+        noise_scale_min = 0.01 * self.noise_scale  # Very small perturbation (near-deterministic)
+        noise_scale_max = 2.0 * self.noise_scale   # Large perturbation
+        random_noise_scale = random.uniform(noise_scale_min, noise_scale_max)
+        
+        # Step factor: reduce noise as we progress through steps
         step_factor = 1.0 - (0.2 * step / total_steps) if total_steps > 0 else 1.0
 
-        # 【关键修改】使用相对噪声而非绝对噪声
-        # 基于输入的标准差进行自适应缩放
-        hidden_std = hidden_states.std(dim=-1, keepdim=True).clamp(min=1e-6)  # 避免除零
-        noise_scale = self.noise_scale * (0.5 + temp_normalized) * step_factor
+        # Use relative noise based on input standard deviation for adaptive scaling
+        hidden_std = hidden_states.std(dim=-1, keepdim=True).clamp(min=1e-6)
+        final_noise_scale = random_noise_scale * step_factor
 
-        # 生成相对于输入量级的噪声
-        noise = torch.randn_like(hidden_states) * noise_scale * hidden_std
+        # Generate noise relative to input magnitude
+        noise = torch.randn_like(hidden_states) * final_noise_scale * hidden_std
         perturbed = hidden_states + noise
 
         logger.debug(f"[TemperatureDiversityStrategy] Path {path_index}: "
-                     f"noise_scale={noise_scale:.4f}, hidden_std={hidden_std.mean():.4f}, "
+                     f"random_noise_scale={random_noise_scale:.4f}, step_factor={step_factor:.4f}, "
+                     f"final_noise_scale={final_noise_scale:.4f}, hidden_std={hidden_std.mean():.4f}, "
                      f"relative_noise={noise.std() / hidden_std.mean():.4f}")
 
         return perturbed
@@ -170,24 +175,27 @@ class TemperatureDiversityStrategy(DiversityStrategy):
     def get_temperature(self, path_index: int, total_paths: int) -> float:
         """Get temperature for a specific path based on baseline temperature.
         
-        Generates temperatures in range: [base_temperature - 0.3, base_temperature + 0.3]
+        Generates randomized temperatures in range: [base_temperature - 0.3, base_temperature + 0.3]
         
         Args:
-            path_index: Index of current path
+            path_index: Index of current path (used for logging only)
             total_paths: Total number of paths
             
         Returns:
             Temperature value for this path
         """
         if total_paths == 1:
+            logger.debug(f"[TemperatureDiversityStrategy] Single path, using base_temperature={self.base_temperature:.3f}")
             return self.base_temperature
         
-        # Generate temperature series: base_temperature ± 0.3
-        ratio = path_index / (total_paths - 1)
-        temp = (self.base_temperature - 0.3) + self.temp_range * ratio
+        # Generate random temperature within range: base_temperature ± 0.3
+        # This breaks the monotonic index-based pattern
+        random_offset = random.uniform(-0.3, 0.3)
+        temp = self.base_temperature + random_offset
         
         logger.debug(f"[TemperatureDiversityStrategy] Path {path_index}/{total_paths}: "
-                    f"base_temp={self.base_temperature:.3f}, generated_temp={temp:.3f}")
+                    f"base_temp={self.base_temperature:.3f}, random_offset={random_offset:.3f}, "
+                    f"generated_temp={temp:.3f}")
         
         return temp
 
@@ -240,15 +248,14 @@ class NoiseDiversityStrategy(DiversityStrategy):
             hidden_states: Input hidden states [B, D]
             path_index: Current path index
             total_paths: Total number of paths
-            **kwargs: Additional parameters (step, total_steps, temperature)
+            **kwargs: Additional parameters (step, total_steps, temperature, deterministic_path)
             
         Returns:
             Hidden states with added noise
         """
-        # Path 0 is kept deterministic (no noise)
-        if path_index == 0:
-            logger.debug(f"[NoiseDiversityStrategy] Path 0: no noise applied (deterministic)")
-            return hidden_states
+        # Note: We no longer use a deterministic path to avoid bias in consistency scoring
+        # All paths receive random noise, but with varying scales (including very small ones)
+        logger.debug(f"[NoiseDiversityStrategy] Path {path_index}/{total_paths}: applying random noise")
         
         # Get current step info for continuous noise application
         step = kwargs.get('step', 0)
@@ -257,8 +264,9 @@ class NoiseDiversityStrategy(DiversityStrategy):
         
         # Calculate noise scale for this path
         if self.adaptive:
-            # More noise for higher path indices
-            path_factor = (path_index / max(1, total_paths - 1))
+            # Random noise factor instead of index-based monotonic scaling
+            # Include very small factors to create near-deterministic paths
+            path_factor = random.uniform(0.01, 1.5)  # 0.01 = near-deterministic, 1.5 = high diversity
             
             # If continuous, reduce noise as we progress through steps
             if self.continuous and total_steps > 0:
@@ -270,15 +278,21 @@ class NoiseDiversityStrategy(DiversityStrategy):
             temp_factor = min(temperature / self.base_temperature, 2.0)  # Scale by temperature, cap at 2x
             
             scale = self.noise_scale * path_factor * step_factor * temp_factor
+            
+            logger.debug(f"[NoiseDiversityStrategy] Path {path_index}/{total_paths}, step {step}/{total_steps}: "
+                        f"random_path_factor={path_factor:.4f}, step_factor={step_factor:.4f}, "
+                        f"temp_factor={temp_factor:.4f}")
         else:
             scale = self.noise_scale
+            logger.debug(f"[NoiseDiversityStrategy] Path {path_index}/{total_paths}: "
+                        f"non-adaptive, using base noise_scale={scale:.4f}")
         
         # Add Gaussian noise
         noise = torch.randn_like(hidden_states) * scale
         noisy_hidden = hidden_states + noise
         
         logger.debug(f"[NoiseDiversityStrategy] Path {path_index}/{total_paths}, step {step}/{total_steps}: "
-                    f"noise_scale={scale:.4f}, noise_norm={noise.norm().item():.4f}")
+                    f"final_noise_scale={scale:.4f}, noise_norm={noise.norm().item():.4f}")
         
         return noisy_hidden
 
@@ -328,21 +342,26 @@ class InitializationDiversityStrategy(DiversityStrategy):
             hidden_states: Input hidden states [B, D]
             path_index: Current path index
             total_paths: Total number of paths
-            **kwargs: May contain 'all_layer_hiddens' for layer variation
+            **kwargs: May contain 'all_layer_hiddens', 'deterministic_path' for layer variation
             
         Returns:
             Modified hidden states
         """
-        # Path 0 uses original hidden states
-        if path_index == 0:
-            logger.debug(f"[InitializationDiversityStrategy] Path 0: using original hidden states")
-            return hidden_states
+        # Note: We no longer use a deterministic path to avoid bias in consistency scoring
+        # All paths receive random perturbation, but with varying scales (including very small ones)
+        logger.debug(f"[InitializationDiversityStrategy] Path {path_index}/{total_paths}: applying random perturbation")
         
-        # Apply perturbation
-        perturbation = torch.randn_like(hidden_states) * self.perturbation_scale
+        # Apply random perturbation with random scale
+        # Include very small scales to create near-deterministic paths
+        random_scale_factor = random.uniform(0.01, 2.0)  # 0.01 = near-deterministic, 2.0 = high diversity
+        actual_perturbation_scale = self.perturbation_scale * random_scale_factor
+        
+        perturbation = torch.randn_like(hidden_states) * actual_perturbation_scale
         perturbed = hidden_states + perturbation
         
         logger.debug(f"[InitializationDiversityStrategy] Path {path_index}/{total_paths}: "
+                    f"random_scale_factor={random_scale_factor:.4f}, "
+                    f"actual_perturbation_scale={actual_perturbation_scale:.4f}, "
                     f"perturbation_norm={perturbation.norm().item():.4f}")
         
         return perturbed

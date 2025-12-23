@@ -504,6 +504,11 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         path.update_state(score=final_score)
                         logger.debug(f"[{agent.name}] Path {path.path_id} metadata: {path.metadata}")
                     
+                    # Log all path scores before pruning (in path_id order for clarity)
+                    all_scores = [(p.path_id, p.score) for p in sorted(new_paths, key=lambda x: x.path_id)]
+                    logger.info(f"[{agent.name}] All path scores before pruning (by path_id): "
+                              f"{[f'({pid}:{score:.4f})' for pid, score in all_scores]}")
+                    
                     # Prune low-quality paths
                     logger.info(f"[{agent.name}] Pruning low-quality paths using {self.pruning_strategy.__class__.__name__}")
                     logger.debug(f"[{agent.name}] Pre-pruning path scores: {[f'{p.path_id}:{p.score:.4f}' for p in new_paths]}")
@@ -513,8 +518,9 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         total_steps=len(self.agents),
                     )
                     logger.info(f"[{agent.name}] Pruning complete: kept {len(pruned_paths)}/{len(new_paths)} paths")
-                    logger.info(f"[{agent.name}] Kept path IDs: {[p.path_id for p in pruned_paths]}")
-                    logger.debug(f"[{agent.name}] Post-pruning path scores: {[f'{p.path_id}:{p.score:.4f}' for p in pruned_paths]}")
+                    kept_paths_info = [(p.path_id, p.score) for p in pruned_paths]
+                    logger.info(f"[{agent.name}] Kept paths (sorted by score desc): "
+                              f"{[f'Path{pid}={score:.4f}' for pid, score in kept_paths_info]}")
                     
                     # Merge similar paths if enabled
                     if self.enable_merging and len(pruned_paths) > 1:
@@ -540,8 +546,10 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     
                     # Record agent trace
                     final_path_scores = [p.score for p in batch_paths[batch_idx]]
+                    final_paths_info = [(p.path_id, p.score) for p in batch_paths[batch_idx]]
                     logger.info(f"[{agent.name}] Final state for item {batch_idx + 1}: {len(batch_paths[batch_idx])} active paths")
-                    logger.info(f"[{agent.name}] Final path scores: {[f'{score:.4f}' for score in final_path_scores]}")
+                    logger.info(f"[{agent.name}] Final paths (sorted by score desc): "
+                              f"{[f'Path{pid}={score:.4f}' for pid, score in final_paths_info]}")
                     logger.debug(f"[{agent.name}] Agent completed processing for item {batch_idx + 1}")
                     
                     agent_traces[batch_idx].append({

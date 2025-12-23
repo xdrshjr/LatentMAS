@@ -278,6 +278,13 @@ class PathManager:
                 )
                 merged_path.hidden_states = weighted_hidden
         
+        elif merge_strategy == 'custom':
+            # Custom merge: caller has already performed the merge
+            # Create a placeholder path that will be updated by caller
+            merged_path = paths_to_merge[0].clone(merged_path_id)
+            merged_score = merged_path.score  # Will be updated by caller
+            logger.debug(f"[PathManager] Using custom merge strategy (path will be updated by caller)")
+        
         else:
             logger.warning(f"[PathManager] Unknown merge strategy: {merge_strategy}")
             return None
@@ -287,15 +294,23 @@ class PathManager:
         merged_path.metadata['merged_from'] = path_ids
         merged_path.metadata['merge_strategy'] = merge_strategy
         
+        # Register merged path
         self.paths[merged_path_id] = merged_path
         self.active_paths.add(merged_path_id)
+        logger.debug(f"[PathManager] Registered merged path {merged_path_id} in path manager")
         
         # Deactivate original paths
+        deactivated_count = 0
         for path_id in path_ids:
-            self.active_paths.discard(path_id)
+            if path_id in self.active_paths:
+                self.active_paths.discard(path_id)
+                deactivated_count += 1
         
-        logger.info(f"[PathManager] Merged paths {path_ids} into path {merged_path_id} "
-                   f"using {merge_strategy}, score={merged_score:.4f}")
+        logger.info(f"[PathManager] Merged {len(path_ids)} paths {path_ids} into path {merged_path_id} "
+                   f"using '{merge_strategy}' strategy, score={merged_score:.4f}")
+        logger.info(f"[PathManager] Deactivated {deactivated_count} original paths from active set")
+        logger.debug(f"[PathManager] Active paths count: {len(self.active_paths)}")
+        
         return merged_path_id
     
     def get_active_paths(self) -> List[PathState]:

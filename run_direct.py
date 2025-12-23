@@ -191,7 +191,7 @@ def main_direct():
         # Generation parameters
         "max_new_tokens": 2048,  # Maximum tokens to generate
         "latent_steps": 5,  # Number of latent steps (for latent_mas and latent_mas_multipath)
-        "temperature": 0.6,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
+        "temperature": 0.8,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
         "top_p": 0.95,  # Top-p sampling parameter
         "generate_bs": 20,  # Batch size for generation
         
@@ -213,7 +213,7 @@ def main_direct():
                                  # Higher = only merge very similar paths, Lower = merge more aggressively
         "branch_threshold": 0.5,  # Uncertainty threshold for branching (0.0-1.0)
                                   # Higher = branch less often, Lower = branch more often
-        "diversity_strategy": "hybrid",  # Options: "temperature", "noise", "hybrid"
+        "diversity_strategy": "temperature",  # Options: "temperature", "noise", "hybrid"
                                         # - "temperature": Use different temperatures per path
                                         # - "noise": Add noise to hidden states
                                         # - "hybrid": Combine both strategies (recommended)

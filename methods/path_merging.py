@@ -395,6 +395,17 @@ class PathSimilarityDetector:
         merge_candidates.sort(key=lambda c: c.merge_priority, reverse=True)
         
         logger.info(f"[PathSimilarityDetector] Found {len(merge_candidates)} merge candidates")
+        
+        if merge_candidates:
+            for idx, candidate in enumerate(merge_candidates, 1):
+                logger.debug(f"[PathSimilarityDetector] Candidate {idx}: "
+                           f"{len(candidate.path_ids)} paths {candidate.path_ids}, "
+                           f"avg_similarity={candidate.avg_similarity:.4f}, "
+                           f"priority={candidate.merge_priority:.4f}")
+        else:
+            logger.debug(f"[PathSimilarityDetector] No similar path groups found "
+                        f"(similarity threshold={self.cosine_threshold})")
+        
         return merge_candidates
 
 
@@ -864,7 +875,10 @@ class PathMerger:
         total_similarity = 0.0
         
         # Process each merge candidate
-        for candidate in merge_candidates:
+        for idx, candidate in enumerate(merge_candidates, 1):
+            logger.debug(f"[PathMerger] Processing merge candidate {idx}/{len(merge_candidates)}: "
+                        f"{len(candidate.path_ids)} paths with avg_similarity={candidate.avg_similarity:.4f}")
+            
             # Skip if any path in this group has already been merged
             if any(pid in merged_path_ids for pid in candidate.path_ids):
                 logger.debug(f"[PathMerger] Skipping candidate (paths already merged): {candidate.path_ids}")
@@ -874,19 +888,26 @@ class PathMerger:
             paths_to_merge = [p for p in paths if p.path_id in candidate.path_ids]
             
             if len(paths_to_merge) < min_group_size:
+                logger.debug(f"[PathMerger] Skipping candidate (insufficient paths): "
+                           f"found {len(paths_to_merge)}, need {min_group_size}")
                 continue
+            
+            # Log paths to merge details
+            paths_info = [f"Path{p.path_id}(score={p.score:.4f})" for p in paths_to_merge]
+            logger.info(f"[PathMerger] Attempting to merge {len(paths_to_merge)} similar paths: {paths_info}")
             
             # Select merge strategy
             if self.auto_select_strategy:
                 strategy = self.select_merge_strategy(paths, candidate)
             else:
                 strategy = self.merge_strategy
+                logger.debug(f"[PathMerger] Using pre-configured strategy: {strategy.__class__.__name__}")
             
-            # Merge paths
+            # Merge paths at data level
             merged_path = strategy.merge(paths_to_merge)
             
             if merged_path is not None:
-                # Use path manager to officially merge
+                # Use path manager to officially merge and register
                 merged_path_id = path_manager.merge_paths(
                     candidate.path_ids,
                     merge_strategy='custom'  # We already merged, just need to register
@@ -906,12 +927,24 @@ class PathMerger:
                         merge_groups += 1
                         total_similarity += candidate.avg_similarity
                         
-                        logger.info(f"[PathMerger] Merged paths {candidate.path_ids} into path {merged_path_id}")
+                        logger.info(f"[PathMerger] Successfully merged {len(candidate.path_ids)} paths "
+                                  f"{candidate.path_ids} into new path {merged_path_id} "
+                                  f"(score={official_merged_path.score:.4f})")
+                    else:
+                        logger.warning(f"[PathMerger] Failed to retrieve merged path {merged_path_id} from path manager")
+                else:
+                    logger.warning(f"[PathMerger] PathManager.merge_paths() returned None for paths {candidate.path_ids}")
+            else:
+                logger.warning(f"[PathMerger] Strategy.merge() returned None for paths {candidate.path_ids}")
         
         # Add paths that were not merged
+        unmerged_paths = []
         for path in paths:
             if path.path_id not in merged_path_ids:
                 result_paths.append(path)
+                unmerged_paths.append(path.path_id)
+        
+        logger.info(f"[PathMerger] Kept {len(unmerged_paths)} unmerged paths: {unmerged_paths}")
         
         # Compute statistics
         avg_similarity = total_similarity / merge_groups if merge_groups > 0 else 0.0
@@ -926,9 +959,14 @@ class PathMerger:
         )
         self.statistics_history.append(stats)
         
+        # Log final statistics
         logger.info(f"[PathMerger] Merge complete: {len(paths)} -> {len(result_paths)} paths "
                    f"({merge_groups} merge groups)")
+        logger.info(f"[PathMerger] Merged {len(merged_path_ids)} paths into {merge_groups} new merged path(s)")
         logger.info(f"[PathMerger] Score change: {stats.score_before_merge:.4f} -> {stats.score_after_merge:.4f}")
+        
+        if merge_groups == 0:
+            logger.debug(f"[PathMerger] No paths were merged (no suitable candidates found or all skipped)")
         
         return result_paths
     
