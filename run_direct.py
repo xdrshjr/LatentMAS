@@ -191,7 +191,7 @@ def main_direct():
         # Generation parameters
         "max_new_tokens": 2048,  # Maximum tokens to generate
         "latent_steps": 5,  # Number of latent steps (for latent_mas and latent_mas_multipath)
-        "temperature": 0.8,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
+        "temperature": 0.5,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
         "top_p": 0.95,  # Top-p sampling parameter
         "generate_bs": 20,  # Batch size for generation
         
@@ -201,7 +201,7 @@ def main_direct():
         "latent_space_realign": True,  # Latent space realignment
         
         # Multi-path specific parameters (for latent_mas_multipath)
-        "num_paths": 10,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
+        "num_paths": 20,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
         "enable_branching": True,  # Enable adaptive branching based on uncertainty
         "enable_merging": True,  # Enable path merging for efficiency (reduces redundant computation)
         "pruning_strategy": "adaptive",  # Options: "topk", "adaptive", "diversity", "budget"
@@ -217,7 +217,7 @@ def main_direct():
                                         # - "temperature": Use different temperatures per path
                                         # - "noise": Add noise to hidden states
                                         # - "hybrid": Combine both strategies (recommended)
-        "latent_consistency_metric": "kl_divergence",  # Options: "cosine", "euclidean", "l2", "kl_divergence"
+        "latent_consistency_metric": "cosine",  # Options: "cosine", "euclidean", "l2", "kl_divergence"
                                                 # Similarity metric for latent consistency scoring
                                                 # - "cosine": Cosine similarity (default, fast and effective)
                                                 # - "euclidean": Euclidean distance
