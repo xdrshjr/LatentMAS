@@ -130,10 +130,10 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         # Initialize scoring metrics
         if scoring_weights is None:
             scoring_weights = {
-                'latent_consistency': 0.0,  # Default to fast latent-based consistency
-                'perplexity': 0.4,
-                'verification': 0.3,
-                'hidden_quality': 0.3,
+                'latent_consistency': 0.4,
+                'perplexity': 0.3,
+                'verification': 0.2,
+                'hidden_quality': 0.1,
             }
         
         # Create ensemble scorer and add individual scorers

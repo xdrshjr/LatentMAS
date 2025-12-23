@@ -927,76 +927,43 @@ class LatentConsistencyScorer(BaseScorer):
         
         logger.info(f"[LatentConsistencyScorer] Initialized with similarity_metric={similarity_metric}, "
                    f"aggregation={aggregation_method}, use_last_latent={use_last_latent}")
-    
-    def score(
-        self,
-        path_states: List[Any],
-        **kwargs
-    ) -> float:
-        """Compute latent-level consistency score across multiple paths.
-        
-        Args:
-            path_states: List of PathState objects to compare
-            **kwargs: Additional arguments (ignored)
-            
-        Returns:
-            Consistency score in [0, 1] where higher means more consistent
-        """
-        logger.debug(f"[LatentConsistencyScorer] Computing latent consistency for {len(path_states)} paths")
-        
-        # Handle edge cases
-        if not path_states:
-            logger.warning("[LatentConsistencyScorer] No paths provided, returning score 0.0")
-            return 0.0
-        
-        if len(path_states) == 1:
-            logger.debug("[LatentConsistencyScorer] Only 1 path provided, returning perfect score 1.0")
-            return 1.0
-        
-        try:
-            # Extract latent representations from each path
-            latent_vectors = []
-            
-            for i, path_state in enumerate(path_states):
-                latent_vec = self._extract_latent_representation(path_state)
-                
-                if latent_vec is None:
-                    logger.warning(f"[LatentConsistencyScorer] Path {i} (id={getattr(path_state, 'path_id', 'N/A')}) "
-                                 f"has no valid latent representation, skipping")
-                    continue
-                
-                latent_vectors.append(latent_vec)
-                logger.debug(f"[LatentConsistencyScorer] Extracted latent from path {i}, shape={latent_vec.shape}")
-            
-            # Need at least 2 valid latents to compute consistency
-            if len(latent_vectors) < 2:
-                logger.warning(f"[LatentConsistencyScorer] Only {len(latent_vectors)} valid latents found, "
-                             f"returning neutral score 0.5")
-                return 0.5
-            
-            # Compute pairwise similarities
-            pairwise_similarities = self._compute_pairwise_similarities(latent_vectors)
-            
-            if not pairwise_similarities:
-                logger.warning("[LatentConsistencyScorer] No valid pairwise similarities computed, returning 0.0")
-                return 0.0
-            
-            # Aggregate similarities into a single consistency score
-            consistency_score = self._aggregate_similarities(pairwise_similarities)
-            
-            logger.info(f"[LatentConsistencyScorer] Latent consistency across {len(latent_vectors)} paths: "
-                       f"{consistency_score:.4f} (metric={self.similarity_metric}, "
-                       f"aggregation={self.aggregation_method})")
-            logger.debug(f"[LatentConsistencyScorer] Pairwise similarities: "
-                        f"min={min(pairwise_similarities):.4f}, "
-                        f"max={max(pairwise_similarities):.4f}, "
-                        f"mean={np.mean(pairwise_similarities):.4f}")
-            
-            return consistency_score
-        
-        except Exception as e:
-            logger.error(f"[LatentConsistencyScorer] Error computing latent consistency: {e}", exc_info=True)
-            return 0.0
+
+    def score(self, path_states: List[Any], **kwargs) -> float:
+        """计算组级潜在一致性分数"""
+        latent_vectors = []
+        for path_state in path_states:
+            vec = self._extract_latent_representation(path_state)
+            if vec is not None:
+                latent_vectors.append(vec)
+
+        if len(latent_vectors) < 2:
+            return 0.5
+
+        # 计算质心(共识表示)
+        centroid = torch.stack(latent_vectors).mean(dim=0)
+
+        # 测量每个路径到质心的距离
+        distances = []
+        for vec in latent_vectors:
+            if self.similarity_metric == 'cosine':
+                sim = F.cosine_similarity(vec.unsqueeze(0), centroid.unsqueeze(0)).item()
+                distances.append((1.0 - sim) / 2.0)  # 转换为距离
+            else:
+                dist = torch.norm(vec - centroid).item()
+                distances.append(dist)
+
+        # 距离越小,一致性越高
+        avg_distance = np.mean(distances)
+        max_distance = np.max(distances)
+
+        # 归一化为 [0, 1],距离小 = 分数高
+        if self.similarity_metric == 'cosine':
+            consistency = 1.0 - avg_distance  # avg_distance in [0, 1]
+        else:
+            # 使用指数衰减
+            consistency = np.exp(-avg_distance / 10.0)
+
+        return float(max(0.0, min(1.0, consistency)))
     
     def _extract_latent_representation(self, path_state: Any) -> Optional[torch.Tensor]:
         """Extract a single latent vector representation from a path.
@@ -1164,111 +1131,50 @@ class LatentConsistencyScorer(BaseScorer):
         
         # Ensure in [0, 1] range
         return float(max(0.0, min(1.0, score)))
-    
-    def score_individual_paths(
-        self,
-        path_states: List[Any],
-        **kwargs
-    ) -> List[float]:
-        """Compute individual consistency scores for each path.
-        
-        For each path, computes its average similarity to all other paths in the group.
-        Paths that are more similar to the group consensus get higher scores.
-        
-        Args:
-            path_states: List of PathState objects to compare
-            **kwargs: Additional arguments (ignored)
-            
-        Returns:
-            List of consistency scores (one per path) in [0, 1]
-        """
-        logger.debug(f"[LatentConsistencyScorer] Computing individual consistency scores for {len(path_states)} paths")
-        
-        # Handle edge cases
-        if not path_states:
-            logger.warning("[LatentConsistencyScorer] No paths provided, returning empty list")
-            return []
-        
-        if len(path_states) == 1:
-            logger.debug("[LatentConsistencyScorer] Only 1 path provided, returning perfect score")
-            return [1.0]
-        
-        try:
-            # Extract latent representations from each path
-            latent_vectors = []
-            valid_indices = []  # Track which paths have valid latents
-            
-            for i, path_state in enumerate(path_states):
-                latent_vec = self._extract_latent_representation(path_state)
-                
-                if latent_vec is None:
-                    logger.warning(f"[LatentConsistencyScorer] Path {i} (id={getattr(path_state, 'path_id', 'N/A')}) "
-                                 f"has no valid latent representation, will assign neutral score")
-                    continue
-                
-                latent_vectors.append(latent_vec)
+
+    def score_individual_paths(self, path_states: List[Any], **kwargs) -> List[float]:
+        """为每个路径计算与共识的对齐分数"""
+        latent_vectors = []
+        valid_indices = []
+
+        for i, path_state in enumerate(path_states):
+            vec = self._extract_latent_representation(path_state)
+            if vec is not None:
+                latent_vectors.append(vec)
                 valid_indices.append(i)
-            
-            # Need at least 2 valid latents to compute meaningful consistency
-            if len(latent_vectors) < 2:
-                logger.warning(f"[LatentConsistencyScorer] Only {len(latent_vectors)} valid latents found, "
-                             f"returning neutral scores")
-                return [0.5] * len(path_states)
-            
-            # Compute pairwise similarity matrix
-            n = len(latent_vectors)
-            similarity_matrix = np.zeros((n, n))
-            
-            for i in range(n):
-                for j in range(n):
-                    if i == j:
-                        similarity_matrix[i, j] = 1.0  # Perfect self-similarity
-                    elif j > i:
-                        # Compute similarity
-                        sim = self._compute_similarity(latent_vectors[i], latent_vectors[j])
-                        if sim is not None:
-                            similarity_matrix[i, j] = sim
-                            similarity_matrix[j, i] = sim  # Symmetric
-                        else:
-                            similarity_matrix[i, j] = 0.5
-                            similarity_matrix[j, i] = 0.5
-            
-            # For each path, compute its average similarity to all OTHER paths
-            individual_scores_valid = []
-            for i in range(n):
-                # Get similarities to all other paths (exclude self)
-                other_similarities = [similarity_matrix[i, j] for j in range(n) if j != i]
-                
-                # Aggregate
-                if other_similarities:
-                    individual_score = self._aggregate_similarities(other_similarities)
-                else:
-                    individual_score = 0.5
-                
-                individual_scores_valid.append(individual_score)
-                logger.debug(f"[LatentConsistencyScorer] Path {valid_indices[i]} consistency with others: "
-                           f"{individual_score:.4f} (avg of {len(other_similarities)} comparisons)")
-            
-            # Build final scores list (including paths with no valid latents)
-            individual_scores = []
-            valid_idx = 0
-            for i in range(len(path_states)):
-                if i in valid_indices:
-                    individual_scores.append(individual_scores_valid[valid_idx])
-                    valid_idx += 1
-                else:
-                    # Path had no valid latent, assign neutral score
-                    individual_scores.append(0.5)
-            
-            logger.info(f"[LatentConsistencyScorer] Individual consistency scores computed: "
-                       f"min={min(individual_scores):.4f}, max={max(individual_scores):.4f}, "
-                       f"mean={np.mean(individual_scores):.4f}")
-            
-            return individual_scores
-        
-        except Exception as e:
-            logger.error(f"[LatentConsistencyScorer] Error computing individual scores: {e}", exc_info=True)
+
+        if len(latent_vectors) < 2:
             return [0.5] * len(path_states)
+
+        # 计算质心
+        centroid = torch.stack(latent_vectors).mean(dim=0)
+
+        # 为每个路径计算与质心的相似度
+        individual_scores_valid = []
+        for vec in latent_vectors:
+            if self.similarity_metric == 'cosine':
+                sim = F.cosine_similarity(vec.unsqueeze(0), centroid.unsqueeze(0)).item()
+                score = (sim + 1.0) / 2.0  # 映射到 [0, 1]
+            elif self.similarity_metric == 'euclidean' or self.similarity_metric == 'l2':
+                dist = torch.norm(vec - centroid).item()
+                # 转换为相似度分数
+                score = 1.0 / (1.0 + dist)  # 或使用 np.exp(-dist / scale)
+            else:
+                score = 0.5
+
+            individual_scores_valid.append(score)
+
+        # 构建完整分数列表
+        individual_scores = []
+        valid_idx = 0
+        for i in range(len(path_states)):
+            if i in valid_indices:
+                individual_scores.append(individual_scores_valid[valid_idx])
+                valid_idx += 1
+            else:
+                individual_scores.append(0.5)
+
+        return individual_scores
 
 
 class EnsembleScorer(BaseScorer):
