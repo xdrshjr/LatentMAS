@@ -180,7 +180,7 @@ def main_direct():
     #
     args_dict = {
         # Core parameters
-        "method": "latent_mas_multipath",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
+        "method": "latent_mas",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
         "model_name": "Qwen/Qwen3-0.6B",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
         "max_samples": len(custom_questions),  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
@@ -191,7 +191,7 @@ def main_direct():
         # Generation parameters
         "max_new_tokens": 2048,  # Maximum tokens to generate
         "latent_steps": 10,  # Number of latent steps (for latent_mas and latent_mas_multipath)
-        "temperature": 0.6,  # Sampling temperature
+        "temperature": 1.2,  # Sampling temperature
         "top_p": 0.95,  # Top-p sampling parameter
         "generate_bs": 20,  # Batch size for generation
         
@@ -201,7 +201,7 @@ def main_direct():
         "latent_space_realign": True,  # Latent space realignment
         
         # Multi-path specific parameters (for latent_mas_multipath)
-        "num_paths": 20,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
+        "num_paths": 10,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
         "enable_branching": True,  # Enable adaptive branching based on uncertainty
         "enable_merging": True,  # Enable path merging for efficiency (reduces redundant computation)
         "pruning_strategy": "adaptive",  # Options: "topk", "adaptive", "diversity", "budget"
@@ -217,6 +217,12 @@ def main_direct():
                                         # - "temperature": Use different temperatures per path
                                         # - "noise": Add noise to hidden states
                                         # - "hybrid": Combine both strategies (recommended)
+        "latent_consistency_metric": "kl_divergence",  # Options: "cosine", "euclidean", "l2", "kl_divergence"
+                                                # Similarity metric for latent consistency scoring
+                                                # - "cosine": Cosine similarity (default, fast and effective)
+                                                # - "euclidean": Euclidean distance
+                                                # - "l2": L2 normalized distance
+                                                # - "kl_divergence": KL divergence (treats vectors as distributions)
         
         # Configuration file support (optional, overrides above multi-path params if provided)
         "config": None,  # Path to JSON/YAML config file (e.g., "config_example.json")
@@ -277,6 +283,7 @@ def main_direct():
         logger.info(f"  Latent steps per path: {args.latent_steps}")
         logger.info(f"  Pruning strategy: {args.pruning_strategy}")
         logger.info(f"  Diversity strategy: {args.diversity_strategy}")
+        logger.info(f"  Latent consistency metric: {args.latent_consistency_metric}")
         logger.info(f"  Adaptive branching: {args.enable_branching}")
         logger.info(f"  Path merging: {args.enable_merging}")
         logger.info(f"  Merge threshold: {args.merge_threshold}")

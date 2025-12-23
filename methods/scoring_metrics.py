@@ -903,7 +903,7 @@ class LatentConsistencyScorer(BaseScorer):
     This is much faster than text-based self-consistency checking.
     
     Attributes:
-        similarity_metric: Method to compute similarity ('cosine', 'euclidean', 'l2')
+        similarity_metric: Method to compute similarity ('cosine', 'euclidean', 'l2', 'kl_divergence')
         aggregation_method: How to aggregate pairwise similarities ('mean', 'min', 'max')
         use_last_latent: Whether to use only the last latent or average all latents
     """
@@ -918,6 +918,10 @@ class LatentConsistencyScorer(BaseScorer):
         
         Args:
             similarity_metric: Method for computing similarity between latents
+                - 'cosine': Cosine similarity (default)
+                - 'euclidean': Euclidean distance
+                - 'l2': L2 normalized distance
+                - 'kl_divergence': KL divergence (treats vectors as probability distributions)
             aggregation_method: Method for aggregating pairwise similarities
             use_last_latent: If True, use only the last latent; if False, average all latents
         """
@@ -927,34 +931,63 @@ class LatentConsistencyScorer(BaseScorer):
         
         logger.info(f"[LatentConsistencyScorer] Initialized with similarity_metric={similarity_metric}, "
                    f"aggregation={aggregation_method}, use_last_latent={use_last_latent}")
+        logger.debug(f"[LatentConsistencyScorer] Supported metrics: cosine, euclidean, l2, kl_divergence")
 
     def score(self, path_states: List[Any], **kwargs) -> float:
-        """计算组级潜在一致性分数"""
+        """计算组级潜在一致性分数
+        
+        Args:
+            path_states: List of path states to score
+            **kwargs: Additional arguments
+            
+        Returns:
+            Consistency score in [0, 1], higher means more consistent
+        """
+        logger.debug(f"[LatentConsistencyScorer] Computing group-level consistency score for {len(path_states)} paths")
+        
         latent_vectors = []
-        for path_state in path_states:
+        for i, path_state in enumerate(path_states):
             vec = self._extract_latent_representation(path_state)
             if vec is not None:
                 latent_vectors.append(vec)
+                logger.debug(f"[LatentConsistencyScorer] Extracted latent vector from path {i}, shape: {vec.shape}")
 
         if len(latent_vectors) < 2:
+            logger.info(f"[LatentConsistencyScorer] Insufficient latent vectors ({len(latent_vectors)}), returning default score 0.5")
             return 0.5
 
         # 计算质心(共识表示)
         centroid = torch.stack(latent_vectors).mean(dim=0)
+        logger.debug(f"[LatentConsistencyScorer] Computed centroid from {len(latent_vectors)} vectors")
 
-        # 测量每个路径到质心的距离
+        # 测量每个路径到质心的距离/相似度
         distances = []
-        for vec in latent_vectors:
+        for i, vec in enumerate(latent_vectors):
             if self.similarity_metric == 'cosine':
                 sim = F.cosine_similarity(vec.unsqueeze(0), centroid.unsqueeze(0)).item()
-                distances.append((1.0 - sim) / 2.0)  # 转换为距离
+                dist = (1.0 - sim) / 2.0  # 转换为距离 [0, 1]
+                distances.append(dist)
+                logger.debug(f"[LatentConsistencyScorer] Path {i} cosine distance to centroid: {dist:.4f}")
+            elif self.similarity_metric == 'kl_divergence':
+                # For KL divergence, compute divergence from centroid
+                eps = 1e-10
+                p = F.softmax(vec, dim=0) + eps
+                q = F.softmax(centroid, dim=0) + eps
+                p = p / p.sum()
+                q = q / q.sum()
+                kl_div = torch.sum(p * torch.log(p / q)).item()
+                distances.append(kl_div)
+                logger.debug(f"[LatentConsistencyScorer] Path {i} KL divergence to centroid: {kl_div:.4f}")
             else:
+                # Euclidean or L2
                 dist = torch.norm(vec - centroid).item()
                 distances.append(dist)
+                logger.debug(f"[LatentConsistencyScorer] Path {i} {self.similarity_metric} distance to centroid: {dist:.4f}")
 
         # 距离越小,一致性越高
         avg_distance = np.mean(distances)
         max_distance = np.max(distances)
+        logger.debug(f"[LatentConsistencyScorer] Average distance: {avg_distance:.4f}, Max distance: {max_distance:.4f}")
 
         # 归一化为 [0, 1],距离小 = 分数高
         if self.similarity_metric == 'cosine':
@@ -963,7 +996,9 @@ class LatentConsistencyScorer(BaseScorer):
             # 使用指数衰减
             consistency = np.exp(-avg_distance / 10.0)
 
-        return float(max(0.0, min(1.0, consistency)))
+        consistency = float(max(0.0, min(1.0, consistency)))
+        logger.info(f"[LatentConsistencyScorer] Final consistency score: {consistency:.4f} (metric: {self.similarity_metric})")
+        return consistency
     
     def _extract_latent_representation(self, path_state: Any) -> Optional[torch.Tensor]:
         """Extract a single latent vector representation from a path.
@@ -1062,6 +1097,7 @@ class LatentConsistencyScorer(BaseScorer):
                 sim = F.cosine_similarity(vec1.unsqueeze(0), vec2.unsqueeze(0)).item()
                 # Map [-1, 1] to [0, 1]
                 normalized_sim = (sim + 1.0) / 2.0
+                logger.debug(f"[LatentConsistencyScorer] Cosine similarity: {sim:.4f}, normalized: {normalized_sim:.4f}")
                 return normalized_sim
             
             elif self.similarity_metric == 'euclidean':
@@ -1070,6 +1106,7 @@ class LatentConsistencyScorer(BaseScorer):
                 # Use exponential decay to map distance to [0, 1]
                 # Assume typical distance scale is around 10-100
                 similarity = np.exp(-distance / 10.0)
+                logger.debug(f"[LatentConsistencyScorer] Euclidean distance: {distance:.4f}, similarity: {similarity:.4f}")
                 return similarity
             
             elif self.similarity_metric == 'l2':
@@ -1081,11 +1118,42 @@ class LatentConsistencyScorer(BaseScorer):
                 # Normalize by vector magnitudes
                 avg_norm = (vec1_norm + vec2_norm) / 2.0
                 if avg_norm == 0:
+                    logger.debug(f"[LatentConsistencyScorer] L2: Zero norm vectors, returning {1.0 if diff_norm == 0 else 0.0}")
                     return 1.0 if diff_norm == 0 else 0.0
                 
                 normalized_diff = diff_norm / avg_norm
                 # Convert to similarity: smaller diff = higher similarity
                 similarity = 1.0 / (1.0 + normalized_diff)
+                logger.debug(f"[LatentConsistencyScorer] L2 normalized diff: {normalized_diff:.4f}, similarity: {similarity:.4f}")
+                return similarity
+            
+            elif self.similarity_metric == 'kl_divergence':
+                # KL divergence: treat vectors as probability distributions
+                # Lower KL divergence = higher similarity
+                logger.debug(f"[LatentConsistencyScorer] Computing KL divergence between vectors")
+                
+                # Convert vectors to probability distributions using softmax
+                # Add small epsilon to avoid log(0)
+                eps = 1e-10
+                
+                # Apply softmax to convert to probability distributions
+                p = F.softmax(vec1, dim=0) + eps
+                q = F.softmax(vec2, dim=0) + eps
+                
+                # Normalize to ensure they sum to 1
+                p = p / p.sum()
+                q = q / q.sum()
+                
+                # Compute KL divergence: KL(P||Q) = sum(P * log(P/Q))
+                kl_div = torch.sum(p * torch.log(p / q)).item()
+                
+                # KL divergence is non-negative, typically in range [0, inf)
+                # Convert to similarity score in [0, 1] using exponential decay
+                # Typical KL divergence values can range from 0 to several units
+                # Use scale factor to map to [0, 1] range
+                similarity = np.exp(-kl_div)
+                
+                logger.debug(f"[LatentConsistencyScorer] KL divergence: {kl_div:.4f}, similarity: {similarity:.4f}")
                 return similarity
             
             else:
@@ -1093,7 +1161,7 @@ class LatentConsistencyScorer(BaseScorer):
                 return None
         
         except Exception as e:
-            logger.error(f"[LatentConsistencyScorer] Error computing similarity: {e}")
+            logger.error(f"[LatentConsistencyScorer] Error computing similarity with metric '{self.similarity_metric}': {e}", exc_info=True)
             return None
     
     def _aggregate_similarities(self, similarities: List[float]) -> float:
@@ -1133,7 +1201,17 @@ class LatentConsistencyScorer(BaseScorer):
         return float(max(0.0, min(1.0, score)))
 
     def score_individual_paths(self, path_states: List[Any], **kwargs) -> List[float]:
-        """为每个路径计算与共识的对齐分数"""
+        """为每个路径计算与共识的对齐分数
+        
+        Args:
+            path_states: List of path states
+            **kwargs: Additional arguments
+            
+        Returns:
+            List of individual scores for each path
+        """
+        logger.debug(f"[LatentConsistencyScorer] Computing individual path scores for {len(path_states)} paths")
+        
         latent_vectors = []
         valid_indices = []
 
@@ -1142,24 +1220,41 @@ class LatentConsistencyScorer(BaseScorer):
             if vec is not None:
                 latent_vectors.append(vec)
                 valid_indices.append(i)
+                logger.debug(f"[LatentConsistencyScorer] Path {i}: extracted latent vector")
 
         if len(latent_vectors) < 2:
+            logger.info(f"[LatentConsistencyScorer] Insufficient vectors for individual scoring, returning default scores")
             return [0.5] * len(path_states)
 
         # 计算质心
         centroid = torch.stack(latent_vectors).mean(dim=0)
+        logger.debug(f"[LatentConsistencyScorer] Computed centroid for individual scoring")
 
         # 为每个路径计算与质心的相似度
         individual_scores_valid = []
-        for vec in latent_vectors:
+        for i, vec in enumerate(latent_vectors):
             if self.similarity_metric == 'cosine':
                 sim = F.cosine_similarity(vec.unsqueeze(0), centroid.unsqueeze(0)).item()
                 score = (sim + 1.0) / 2.0  # 映射到 [0, 1]
+                logger.debug(f"[LatentConsistencyScorer] Path {valid_indices[i]} cosine score: {score:.4f}")
+            elif self.similarity_metric == 'kl_divergence':
+                # Compute KL divergence to centroid
+                eps = 1e-10
+                p = F.softmax(vec, dim=0) + eps
+                q = F.softmax(centroid, dim=0) + eps
+                p = p / p.sum()
+                q = q / q.sum()
+                kl_div = torch.sum(p * torch.log(p / q)).item()
+                # Convert to similarity score
+                score = np.exp(-kl_div)
+                logger.debug(f"[LatentConsistencyScorer] Path {valid_indices[i]} KL divergence score: {score:.4f}")
             elif self.similarity_metric == 'euclidean' or self.similarity_metric == 'l2':
                 dist = torch.norm(vec - centroid).item()
                 # 转换为相似度分数
                 score = 1.0 / (1.0 + dist)  # 或使用 np.exp(-dist / scale)
+                logger.debug(f"[LatentConsistencyScorer] Path {valid_indices[i]} {self.similarity_metric} score: {score:.4f}")
             else:
+                logger.warning(f"[LatentConsistencyScorer] Unknown metric '{self.similarity_metric}', using default score")
                 score = 0.5
 
             individual_scores_valid.append(score)
@@ -1174,6 +1269,7 @@ class LatentConsistencyScorer(BaseScorer):
             else:
                 individual_scores.append(0.5)
 
+        logger.info(f"[LatentConsistencyScorer] Computed {len(individual_scores)} individual scores (metric: {self.similarity_metric})")
         return individual_scores
 
 

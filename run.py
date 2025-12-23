@@ -567,6 +567,9 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         parser.add_argument("--branch_threshold", type=float, default=0.5, help="Uncertainty threshold for adaptive branching")
         parser.add_argument("--diversity_strategy", type=str, choices=["temperature", "noise", "hybrid"], default="hybrid",
                             help="Diversity strategy for generating diverse paths")
+        parser.add_argument("--latent_consistency_metric", type=str, 
+                            choices=["cosine", "euclidean", "l2", "kl_divergence"], default="cosine",
+                            help="Similarity metric for latent consistency scoring (cosine/euclidean/l2/kl_divergence)")
         
         # Configuration file support
         parser.add_argument("--config", type=str, default=None, help="Path to configuration file (JSON or YAML)")
@@ -662,12 +665,14 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
                 'merge_threshold': args.merge_threshold,
                 'branch_threshold': args.branch_threshold,
                 'diversity_strategy': args.diversity_strategy,
+                'latent_consistency_metric': args.latent_consistency_metric,
                 'temperature': args.temperature,
                 'top_p': args.top_p,
                 'max_new_tokens': args.max_new_tokens,
                 'generate_bs': args.generate_bs,
                 'enable_visualization': getattr(args, 'enable_visualization', True),
             }
+            logger.debug(f"[Configuration] Using latent consistency metric: {args.latent_consistency_metric}")
             # Only include latent_steps if explicitly provided (not None)
             if args.latent_steps is not None:
                 config_kwargs['latent_steps'] = args.latent_steps
@@ -686,6 +691,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         args.merge_threshold = multipath_config.merge_threshold
         args.branch_threshold = multipath_config.branch_threshold
         args.diversity_strategy = multipath_config.diversity_strategy
+        args.latent_consistency_metric = multipath_config.latent_consistency_metric
         args.latent_steps = multipath_config.latent_steps
         args.temperature = multipath_config.temperature
         args.top_p = multipath_config.top_p
@@ -698,6 +704,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         logger.info(f"[Configuration] Final multi-path config: num_paths={args.num_paths}, "
                    f"pruning={args.pruning_strategy}, diversity={args.diversity_strategy}, "
                    f"branching={args.enable_branching}, merging={args.enable_merging}, "
+                   f"latent_consistency_metric={args.latent_consistency_metric}, "
                    f"latent_steps={args.latent_steps}, visualization={args.enable_visualization}")
     else:
         # For non-multipath methods, ensure enable_visualization attribute exists
@@ -766,6 +773,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
             args=args,
         )
     elif args.method == 'latent_mas_multipath':
+        logger.info(f"[Method Init] Initializing LatentMASMultiPathMethod with latent_consistency_metric={args.latent_consistency_metric}")
         method = LatentMASMultiPathMethod(
             model,
             latent_steps=args.latent_steps,
@@ -780,6 +788,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
             merge_threshold=args.merge_threshold,
             branch_threshold=args.branch_threshold,
             diversity_strategy=args.diversity_strategy,
+            latent_consistency_metric=args.latent_consistency_metric,
         )
     logger.info(f"Method {args.method} initialized successfully")
 

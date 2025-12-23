@@ -25,5 +25,7 @@ python run.py \
   --max_new_tokens 512 \
   --seed 42 \
   --latent_steps 10 \
+  --latent_consistency_metric cosine \
   --enable_visualization
   # Add --disable_visualization to skip visualization generation
+  # Options for --latent_consistency_metric: cosine (default), euclidean, l2, kl_divergence

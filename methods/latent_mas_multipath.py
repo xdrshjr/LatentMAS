@@ -69,6 +69,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         merge_threshold: float = 0.9,
         branch_threshold: float = 0.5,
         diversity_strategy: str = "hybrid",
+        latent_consistency_metric: str = "cosine",
     ) -> None:
         """Initialize the multi-path LatentMAS method.
         
@@ -88,6 +89,8 @@ class LatentMASMultiPathMethod(LatentMASMethod):
             merge_threshold: Similarity threshold for merging (default: 0.9)
             branch_threshold: Uncertainty threshold for branching (default: 0.5)
             diversity_strategy: Diversity strategy name (default: "hybrid")
+            latent_consistency_metric: Similarity metric for latent consistency 
+                ("cosine", "euclidean", "l2", "kl_divergence", default: "cosine")
         """
         # Initialize parent class
         super().__init__(
@@ -157,17 +160,19 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         if 'latent_consistency' in scoring_weights:
             # Latent-based consistency (faster, no decoding required)
             # Note: This will be computed at the path group level
+            logger.info(f"[LatentMASMultiPathMethod] Initializing LatentConsistencyScorer with metric: {latent_consistency_metric}")
             latent_consistency_scorer = LatentConsistencyScorer(
-                similarity_metric='cosine',
+                similarity_metric=latent_consistency_metric,
                 aggregation_method='mean',
                 use_last_latent=True
             )
             self.latent_consistency_scorer = latent_consistency_scorer
             self.latent_consistency_weight = scoring_weights['latent_consistency']
-            logger.info("[LatentMASMultiPathMethod] Using latent-based self-consistency (faster, no decoding)")
+            logger.info(f"[LatentMASMultiPathMethod] Using latent-based self-consistency with {latent_consistency_metric} metric (faster, no decoding)")
         else:
             self.latent_consistency_scorer = None
             self.latent_consistency_weight = 0.0
+            logger.debug("[LatentMASMultiPathMethod] Latent consistency scorer not enabled in scoring weights")
         
         if 'verification' in scoring_weights:
             verification_scorer = VerificationScorer(model_wrapper=model)

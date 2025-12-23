@@ -9,10 +9,11 @@ pruning_strategy: adaptive      # Options: topk, adaptive, diversity, budget
 merge_threshold: 0.9            # Similarity threshold for path merging [0.0-1.0]
 branch_threshold: 0.5           # Uncertainty threshold for branching [0.0-1.0]
 diversity_strategy: hybrid      # Options: temperature, noise, hybrid
+latent_consistency_metric: cosine  # Options: cosine, euclidean, l2, kl_divergence
 
 # Scoring weights for ensemble scorer (must sum to ~1.0)
 scoring_weights:
-  self_consistency: 0.4         # Weight for self-consistency score
+  latent_consistency: 0.4       # Weight for latent-based consistency score (faster)
   perplexity: 0.3               # Weight for perplexity-based score
   verification: 0.2             # Weight for verification score
   hidden_quality: 0.1           # Weight for hidden state quality

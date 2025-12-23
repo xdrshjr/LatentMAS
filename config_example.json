@@ -6,8 +6,9 @@
   "merge_threshold": 0.9,
   "branch_threshold": 0.5,
   "diversity_strategy": "hybrid",
+  "latent_consistency_metric": "cosine",
   "scoring_weights": {
-    "self_consistency": 0.4,
+    "latent_consistency": 0.4,
     "perplexity": 0.3,
     "verification": 0.2,
     "hidden_quality": 0.1

@@ -42,10 +42,13 @@ class MultiPathConfig:
         merge_threshold: Cosine similarity threshold for path merging [0.0-1.0]
         branch_threshold: Uncertainty threshold for adaptive branching [0.0-1.0]
         diversity_strategy: Strategy for generating diverse paths ("temperature", "noise", "hybrid")
+        latent_consistency_metric: Similarity metric for latent consistency scoring 
+            ("cosine", "euclidean", "l2", "kl_divergence")
         
         # Scoring weights for ensemble scorer
         scoring_weights: Weights for different scoring metrics
-            - self_consistency: Weight for self-consistency score (default: 0.4)
+            - latent_consistency: Weight for latent-based consistency score (default: 0.4)
+            - self_consistency: Weight for text-based self-consistency score (slower, optional)
             - perplexity: Weight for perplexity-based score (default: 0.3)
             - verification: Weight for verification score (default: 0.2)
             - hidden_quality: Weight for hidden state quality (default: 0.1)
@@ -79,12 +82,15 @@ class MultiPathConfig:
     branch_threshold: float = 0.5
     diversity_strategy: str = "hybrid"
     
+    # Latent consistency scoring parameters
+    latent_consistency_metric: str = "cosine"
+    
     # Visualization parameters
     enable_visualization: bool = True
     
     # Scoring weights
     scoring_weights: Dict[str, float] = field(default_factory=lambda: {
-        "self_consistency": 0.4,
+        "latent_consistency": 0.4,  # Use latent-based consistency (faster, no decoding)
         "perplexity": 0.3,
         "verification": 0.2,
         "hidden_quality": 0.1,
@@ -134,6 +140,12 @@ class MultiPathConfig:
         if self.diversity_strategy not in valid_diversity:
             raise ValueError(f"diversity_strategy must be one of {valid_diversity}, got '{self.diversity_strategy}'")
         
+        # Validate latent_consistency_metric
+        valid_metrics = ["cosine", "euclidean", "l2", "kl_divergence"]
+        if self.latent_consistency_metric not in valid_metrics:
+            raise ValueError(f"latent_consistency_metric must be one of {valid_metrics}, got '{self.latent_consistency_metric}'")
+        logger.debug(f"[MultiPathConfig] Using latent consistency metric: {self.latent_consistency_metric}")
+        
         # Validate thresholds (must be in [0, 1])
         if not 0.0 <= self.merge_threshold <= 1.0:
             raise ValueError(f"merge_threshold must be in [0.0, 1.0], got {self.merge_threshold}")
@@ -146,12 +158,17 @@ class MultiPathConfig:
         if not isinstance(self.scoring_weights, dict):
             raise ValueError(f"scoring_weights must be a dict, got {type(self.scoring_weights)}")
         
-        required_weights = ["self_consistency", "perplexity", "verification", "hidden_quality"]
-        for weight_name in required_weights:
-            if weight_name not in self.scoring_weights:
-                raise ValueError(f"scoring_weights missing required key: '{weight_name}'")
-            if not 0.0 <= self.scoring_weights[weight_name] <= 1.0:
-                raise ValueError(f"scoring_weights['{weight_name}'] must be in [0.0, 1.0], got {self.scoring_weights[weight_name]}")
+        # Check that at least one scoring metric is present
+        valid_weight_keys = ["latent_consistency", "self_consistency", "perplexity", "verification", "hidden_quality"]
+        if not any(key in self.scoring_weights for key in valid_weight_keys):
+            raise ValueError(f"scoring_weights must contain at least one of: {valid_weight_keys}")
+        
+        # Validate each weight value is in [0, 1]
+        for weight_name, weight_value in self.scoring_weights.items():
+            if weight_name not in valid_weight_keys:
+                logger.warning(f"[MultiPathConfig] Unknown scoring weight key: '{weight_name}'")
+            if not 0.0 <= weight_value <= 1.0:
+                raise ValueError(f"scoring_weights['{weight_name}'] must be in [0.0, 1.0], got {weight_value}")
         
         # Validate weights sum to approximately 1.0
         weight_sum = sum(self.scoring_weights.values())
@@ -331,6 +348,7 @@ class ConfigLoader:
         override_params = [
             'num_paths', 'enable_branching', 'enable_merging', 'pruning_strategy',
             'merge_threshold', 'branch_threshold', 'diversity_strategy',
+            'latent_consistency_metric',
             'latent_steps', 'temperature', 'top_p', 'max_new_tokens', 'generate_bs',
             'enable_visualization'
         ]
