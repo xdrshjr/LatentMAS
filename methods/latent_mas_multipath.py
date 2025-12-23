@@ -55,6 +55,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         model: ModelWrapper,
         *,
         latent_steps: int = 10,
+        latent_consistency_metric: str = "cosine",
         judger_max_new_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.95,
@@ -68,8 +69,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         scoring_weights: Optional[Dict[str, float]] = None,
         merge_threshold: float = 0.9,
         branch_threshold: float = 0.5,
-        diversity_strategy: str = "hybrid",
-        latent_consistency_metric: str = "cosine",
+        diversity_strategy: str = "hybrid"
     ) -> None:
         """Initialize the multi-path LatentMAS method.
         
@@ -109,6 +109,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         self.enable_merging = enable_merging
         self.merge_threshold = merge_threshold
         self.branch_threshold = branch_threshold
+        self.latent_consistency_metric = latent_consistency_metric
         
         # Override method name
         self.method_name = 'latent_mas_multipath'
@@ -160,15 +161,15 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         if 'latent_consistency' in scoring_weights:
             # Latent-based consistency (faster, no decoding required)
             # Note: This will be computed at the path group level
-            logger.info(f"[LatentMASMultiPathMethod] Initializing LatentConsistencyScorer with metric: {latent_consistency_metric}")
+            logger.info(f"[LatentMASMultiPathMethod] Initializing LatentConsistencyScorer with metric: {self.latent_consistency_metric}")
             latent_consistency_scorer = LatentConsistencyScorer(
-                similarity_metric=latent_consistency_metric,
+                similarity_metric=self.latent_consistency_metric,
                 aggregation_method='mean',
                 use_last_latent=True
             )
             self.latent_consistency_scorer = latent_consistency_scorer
             self.latent_consistency_weight = scoring_weights['latent_consistency']
-            logger.info(f"[LatentMASMultiPathMethod] Using latent-based self-consistency with {latent_consistency_metric} metric (faster, no decoding)")
+            logger.info(f"[LatentMASMultiPathMethod] Using latent-based self-consistency with {self.latent_consistency_metric} metric (faster, no decoding)")
         else:
             self.latent_consistency_scorer = None
             self.latent_consistency_weight = 0.0
@@ -360,7 +361,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                 logger.debug(f"[{agent.name}] Item {batch_idx + 1} messages: {messages}")
                 # Log the full prompt that will be sent to the model
                 prompt_preview = str(messages)[:500] if len(str(messages)) > 500 else str(messages)
-                logger.info(f"[{agent.name}] Item {batch_idx + 1} prompt preview: {prompt_preview}...")
+                logger.info(f"[{agent.name}] Item: {batch_idx + 1}, Prompt preview: {prompt_preview}...")
             
             # Prepare input
             prompts, input_ids, attention_mask, tokens_batch = self.model.prepare_chat_batch(

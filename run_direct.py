@@ -180,7 +180,7 @@ def main_direct():
     #
     args_dict = {
         # Core parameters
-        "method": "latent_mas",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
+        "method": "latent_mas_multipath",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
         "model_name": "Qwen/Qwen3-0.6B",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
         "max_samples": len(custom_questions),  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
