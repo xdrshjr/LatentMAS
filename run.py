@@ -184,6 +184,12 @@ def generate_visualizations(
         args: Command line arguments
         output_dir: Optional output directory for visualization files
     """
+    # Check if visualization is enabled
+    enable_viz = getattr(args, 'enable_visualization', True)
+    if not enable_viz:
+        logger.debug(f"[Visualization] Visualization disabled by configuration for problem #{problem_idx}")
+        return
+    
     # Only generate visualizations for latent_mas_multipath method
     if not isinstance(method, LatentMASMultiPathMethod):
         logger.debug(f"[Visualization] Skipping visualization for method {type(method).__name__}")
@@ -568,6 +574,12 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
                             choices=["conservative", "balanced", "aggressive", "fast", "quality"],
                             help="Use a preset configuration (conservative/balanced/aggressive/fast/quality)")
         parser.add_argument("--list_presets", action="store_true", help="List available configuration presets and exit")
+        
+        # Visualization control
+        parser.add_argument("--enable_visualization", action="store_true", default=True,
+                            help="Enable visualization graph generation (default: True)")
+        parser.add_argument("--disable_visualization", dest="enable_visualization", action="store_false",
+                            help="Disable visualization graph generation")
 
         args = parser.parse_args()
         
@@ -599,6 +611,13 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
     )
     
     logger.info(f"Logging configured: console_level={args.log_level}, log_file={log_file}")
+    
+    # Log visualization setting
+    enable_viz = getattr(args, 'enable_visualization', True)
+    if enable_viz:
+        logger.info("[Visualization] Visualization generation is ENABLED")
+    else:
+        logger.info("[Visualization] Visualization generation is DISABLED")
     
     # Create output file for question-answer records
     model_short = args.model_name.split('/')[-1] if '/' in args.model_name else args.model_name
@@ -647,6 +666,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
                 'top_p': args.top_p,
                 'max_new_tokens': args.max_new_tokens,
                 'generate_bs': args.generate_bs,
+                'enable_visualization': getattr(args, 'enable_visualization', True),
             }
             # Only include latent_steps if explicitly provided (not None)
             if args.latent_steps is not None:
@@ -671,11 +691,19 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         args.top_p = multipath_config.top_p
         args.max_new_tokens = multipath_config.max_new_tokens
         args.generate_bs = multipath_config.generate_bs
+        # Only update enable_visualization if not explicitly set via command line
+        if not hasattr(args, 'enable_visualization') or args.enable_visualization is None:
+            args.enable_visualization = multipath_config.enable_visualization
         
         logger.info(f"[Configuration] Final multi-path config: num_paths={args.num_paths}, "
                    f"pruning={args.pruning_strategy}, diversity={args.diversity_strategy}, "
                    f"branching={args.enable_branching}, merging={args.enable_merging}, "
-                   f"latent_steps={args.latent_steps}")
+                   f"latent_steps={args.latent_steps}, visualization={args.enable_visualization}")
+    else:
+        # For non-multipath methods, ensure enable_visualization attribute exists
+        if not hasattr(args, 'enable_visualization'):
+            args.enable_visualization = True
+            logger.debug(f"[Visualization] Set default enable_visualization=True for {args.method} method")
     
     # If custom_questions is provided, use it instead of dataset
     if custom_questions is not None:

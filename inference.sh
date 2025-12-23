@@ -24,4 +24,6 @@ python run.py \
   --max_samples -1 \
   --max_new_tokens 512 \
   --seed 42 \
-  --latent_steps 10
+  --latent_steps 10 \
+  --enable_visualization
+  # Add --disable_visualization to skip visualization generation

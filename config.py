@@ -65,6 +65,9 @@ class MultiPathConfig:
         # Budget parameters (for budget-based pruning)
         max_compute_budget: Maximum computational budget (arbitrary units)
         cost_per_token: Cost per token for budget calculation
+        
+        # Visualization parameters
+        enable_visualization: Whether to generate visualization graphs
     """
     
     # Core multi-path parameters
@@ -75,6 +78,9 @@ class MultiPathConfig:
     merge_threshold: float = 0.9
     branch_threshold: float = 0.5
     diversity_strategy: str = "hybrid"
+    
+    # Visualization parameters
+    enable_visualization: bool = True
     
     # Scoring weights
     scoring_weights: Dict[str, float] = field(default_factory=lambda: {
@@ -325,7 +331,8 @@ class ConfigLoader:
         override_params = [
             'num_paths', 'enable_branching', 'enable_merging', 'pruning_strategy',
             'merge_threshold', 'branch_threshold', 'diversity_strategy',
-            'latent_steps', 'temperature', 'top_p', 'max_new_tokens', 'generate_bs'
+            'latent_steps', 'temperature', 'top_p', 'max_new_tokens', 'generate_bs',
+            'enable_visualization'
         ]
         
         overrides_applied = []
