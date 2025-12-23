@@ -25,7 +25,10 @@ python run.py \
   --max_new_tokens 512 \
   --seed 42 \
   --latent_steps 10 \
+  --temperature 0.7 \
   --latent_consistency_metric cosine \
   --enable_visualization
   # Add --disable_visualization to skip visualization generation
   # Options for --latent_consistency_metric: cosine (default), euclidean, l2, kl_divergence
+  # --temperature sets the baseline temperature (default: 0.7)
+  # Diversity strategies will generate temperatures in range [baseline-0.3, baseline+0.3]

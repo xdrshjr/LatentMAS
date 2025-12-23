@@ -541,7 +541,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         parser.add_argument("--split", type=str, default="test")
         parser.add_argument("--max_new_tokens", type=int, default=4096)
         parser.add_argument("--latent_steps", type=int, default=None, help="Number of latent steps for LatentMAS method (default: uses method/config default)")
-        parser.add_argument("--temperature", type=float, default=0.6)
+        parser.add_argument("--temperature", type=float, default=None, help="Baseline temperature for generation and diversity strategies (default: 0.7)")
         parser.add_argument("--top_p", type=float, default=0.95)
         parser.add_argument("--generate_bs", type=int, default=20, help="Batch size for generation")
         parser.add_argument("--text_mas_context_length", type=int, default=-1, help="TextMAS context length limit")
@@ -712,6 +712,13 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
             args.enable_visualization = True
             logger.debug(f"[Visualization] Set default enable_visualization=True for {args.method} method")
     
+    # Set default temperature if not specified
+    if args.temperature is None:
+        args.temperature = 0.7
+        logger.info(f"[Temperature] No temperature specified, using default baseline temperature: {args.temperature}")
+    else:
+        logger.info(f"[Temperature] Using baseline temperature: {args.temperature}")
+    
     # If custom_questions is provided, use it instead of dataset
     if custom_questions is not None:
         logger.info("Custom questions mode enabled")
@@ -737,6 +744,15 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
     
     start_time = time.time()
 
+    # Log baseline temperature usage
+    logger.info("=" * 80)
+    logger.info(f"[Temperature Configuration]")
+    logger.info(f"  Baseline temperature: {args.temperature}")
+    logger.info(f"  This baseline will be used to generate a series of temperatures")
+    logger.info(f"  for diversity strategies in multi-path reasoning")
+    logger.info(f"  Temperature range: [{args.temperature - 0.3:.2f}, {args.temperature + 0.3:.2f}]")
+    logger.info("=" * 80)
+    
     common_kwargs = dict(
         temperature=args.temperature,
         top_p=args.top_p,

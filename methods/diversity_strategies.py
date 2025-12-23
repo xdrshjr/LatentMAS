@@ -19,7 +19,19 @@ class DiversityStrategy(ABC):
     
     All diversity strategies should inherit from this class and implement
     the apply method to generate diverse latent paths.
+    
+    Attributes:
+        base_temperature: Baseline temperature for generating temperature series
     """
+    
+    def __init__(self, base_temperature: float = 0.7):
+        """Initialize diversity strategy with baseline temperature.
+        
+        Args:
+            base_temperature: Baseline temperature for diversity generation (default: 0.7)
+        """
+        self.base_temperature = base_temperature
+        logger.debug(f"[DiversityStrategy] Initialized with base_temperature={base_temperature}")
     
     @abstractmethod
     def apply(
@@ -43,7 +55,10 @@ class DiversityStrategy(ABC):
         pass
     
     def get_temperature(self, path_index: int, total_paths: int) -> float:
-        """Get temperature for a specific path.
+        """Get temperature for a specific path based on baseline temperature.
+        
+        Generates a series of temperatures centered around the baseline temperature.
+        The temperature range is: [base_temperature - 0.3, base_temperature + 0.3]
         
         Args:
             path_index: Index of current path
@@ -52,8 +67,20 @@ class DiversityStrategy(ABC):
         Returns:
             Temperature value for this path
         """
-        # Default: linearly interpolate between base temperatures
-        return 0.7 + 0.6 * (path_index / max(1, total_paths - 1))
+        if total_paths == 1:
+            return self.base_temperature
+        
+        # Generate temperature series: base_temp ± 0.3
+        # For path 0: base_temp - 0.3
+        # For last path: base_temp + 0.3
+        temp_range = 0.6  # Total range: ±0.3
+        ratio = path_index / max(1, total_paths - 1)
+        temperature = (self.base_temperature - 0.3) + temp_range * ratio
+        
+        logger.debug(f"[DiversityStrategy] Path {path_index}/{total_paths}: "
+                    f"base_temp={self.base_temperature:.3f}, generated_temp={temperature:.3f}")
+        
+        return temperature
 
 
 class TemperatureDiversityStrategy(DiversityStrategy):
@@ -64,30 +91,28 @@ class TemperatureDiversityStrategy(DiversityStrategy):
     temperature-scaled noise to hidden states.
     
     Attributes:
-        base_temp: Base temperature value
-        temp_range: Range of temperature variation
+        base_temperature: Baseline temperature value (inherited from DiversityStrategy)
+        temp_range: Range of temperature variation (±0.3 from baseline)
         noise_scale: Base noise scale for temperature-based perturbation
     """
     
     def __init__(
         self,
-        base_temp: float = 0.7,
-        temp_range: float = 0.6,
+        base_temperature: float = 0.7,
         noise_scale: float = 0.2
     ):
         """Initialize temperature diversity strategy.
         
         Args:
-            base_temp: Base temperature (for path 0)
-            temp_range: Temperature range (max_temp = base_temp + temp_range)
+            base_temperature: Baseline temperature for generating temperature series
             noise_scale: Base noise scale for perturbation
         """
-        self.base_temp = base_temp
-        self.temp_range = temp_range
+        super().__init__(base_temperature=base_temperature)
+        self.temp_range = 0.6  # Fixed range: ±0.3 from baseline
         self.noise_scale = noise_scale
-        logger.debug(f"[TemperatureDiversityStrategy] Initialized with base_temp={base_temp}, "
-                    f"temp_range={temp_range}, noise_scale={noise_scale}")
-    
+        logger.info(f"[TemperatureDiversityStrategy] Initialized with base_temperature={base_temperature}, "
+                   f"temp_range=±0.3, noise_scale={noise_scale}")
+
     def apply(
         self,
         hidden_states: torch.Tensor,
@@ -96,54 +121,56 @@ class TemperatureDiversityStrategy(DiversityStrategy):
         **kwargs
     ) -> torch.Tensor:
         """Apply temperature-based diversity through noise perturbation.
-        
+
         Since latent generation is deterministic, we use temperature to scale
         noise that's added to hidden states, simulating the effect of sampling
         at different temperatures.
-        
+
         Args:
             hidden_states: Input hidden states [B, D]
             path_index: Current path index
             total_paths: Total number of paths
             **kwargs: Additional parameters (temperature, step, total_steps)
-            
+
         Returns:
             Hidden states with temperature-scaled perturbation
         """
         temp = kwargs.get('temperature', self.get_temperature(path_index, total_paths))
         logger.debug(f"[TemperatureDiversityStrategy] Path {path_index}/{total_paths}: temperature={temp:.3f}")
-        
+
         # Path 0 is deterministic
         if path_index == 0:
-            logger.debug(f"[TemperatureDiversityStrategy] Path 0: no perturbation (deterministic)")
             return hidden_states
-        
-        # Get step info for progressive noise reduction
+
         step = kwargs.get('step', 0)
         total_steps = kwargs.get('total_steps', 1)
-        
-        # Scale noise by temperature (higher temp = more noise)
-        # Normalize temperature to [0, 1] range for scaling
-        temp_normalized = (temp - self.base_temp) / self.temp_range if self.temp_range > 0 else 0.0
+
+        # Temperature scaling
+        min_temp = self.base_temperature - 0.3
+        temp_normalized = (temp - min_temp) / self.temp_range if self.temp_range > 0 else 0.0
         temp_normalized = max(0.0, min(1.0, temp_normalized))
-        
-        # Reduce noise as we progress through steps
+
         step_factor = 1.0 - (0.2 * step / total_steps) if total_steps > 0 else 1.0
-        
-        # Calculate final noise scale
+
+        # 【关键修改】使用相对噪声而非绝对噪声
+        # 基于输入的标准差进行自适应缩放
+        hidden_std = hidden_states.std(dim=-1, keepdim=True).clamp(min=1e-6)  # 避免除零
         noise_scale = self.noise_scale * (0.5 + temp_normalized) * step_factor
-        
-        # Add temperature-scaled Gaussian noise
-        noise = torch.randn_like(hidden_states) * noise_scale
+
+        # 生成相对于输入量级的噪声
+        noise = torch.randn_like(hidden_states) * noise_scale * hidden_std
         perturbed = hidden_states + noise
-        
-        logger.debug(f"[TemperatureDiversityStrategy] Path {path_index}: noise_scale={noise_scale:.4f}, "
-                    f"noise_norm={noise.norm().item():.4f}")
-        
+
+        logger.debug(f"[TemperatureDiversityStrategy] Path {path_index}: "
+                     f"noise_scale={noise_scale:.4f}, hidden_std={hidden_std.mean():.4f}, "
+                     f"relative_noise={noise.std() / hidden_std.mean():.4f}")
+
         return perturbed
     
     def get_temperature(self, path_index: int, total_paths: int) -> float:
-        """Get temperature for a specific path.
+        """Get temperature for a specific path based on baseline temperature.
+        
+        Generates temperatures in range: [base_temperature - 0.3, base_temperature + 0.3]
         
         Args:
             path_index: Index of current path
@@ -153,11 +180,15 @@ class TemperatureDiversityStrategy(DiversityStrategy):
             Temperature value for this path
         """
         if total_paths == 1:
-            return self.base_temp
+            return self.base_temperature
         
-        # Linearly interpolate from base_temp to base_temp + temp_range
+        # Generate temperature series: base_temperature ± 0.3
         ratio = path_index / (total_paths - 1)
-        temp = self.base_temp + self.temp_range * ratio
+        temp = (self.base_temperature - 0.3) + self.temp_range * ratio
+        
+        logger.debug(f"[TemperatureDiversityStrategy] Path {path_index}/{total_paths}: "
+                    f"base_temp={self.base_temperature:.3f}, generated_temp={temp:.3f}")
+        
         return temp
 
 
@@ -168,6 +199,7 @@ class NoiseDiversityStrategy(DiversityStrategy):
     different regions of the latent space.
     
     Attributes:
+        base_temperature: Baseline temperature value (inherited from DiversityStrategy)
         noise_scale: Standard deviation of Gaussian noise
         adaptive: Whether to adapt noise based on path index
         continuous: Whether to apply noise at every step
@@ -175,6 +207,7 @@ class NoiseDiversityStrategy(DiversityStrategy):
     
     def __init__(
         self,
+        base_temperature: float = 0.7,
         noise_scale: float = 0.3,
         adaptive: bool = True,
         continuous: bool = True
@@ -182,15 +215,17 @@ class NoiseDiversityStrategy(DiversityStrategy):
         """Initialize noise diversity strategy.
         
         Args:
+            base_temperature: Baseline temperature for generating temperature series
             noise_scale: Standard deviation of Gaussian noise (increased default from 0.1 to 0.3)
             adaptive: If True, scale noise based on path index
             continuous: If True, apply noise at every latent step
         """
+        super().__init__(base_temperature=base_temperature)
         self.noise_scale = noise_scale
         self.adaptive = adaptive
         self.continuous = continuous
-        logger.debug(f"[NoiseDiversityStrategy] Initialized with noise_scale={noise_scale}, "
-                    f"adaptive={adaptive}, continuous={continuous}")
+        logger.info(f"[NoiseDiversityStrategy] Initialized with base_temperature={base_temperature}, "
+                   f"noise_scale={noise_scale}, adaptive={adaptive}, continuous={continuous}")
     
     def apply(
         self,
@@ -231,8 +266,8 @@ class NoiseDiversityStrategy(DiversityStrategy):
             else:
                 step_factor = 1.0
             
-            # Use temperature to scale noise
-            temp_factor = min(temperature / 0.7, 2.0)  # Scale by temperature, cap at 2x
+            # Use temperature to scale noise (normalized by baseline)
+            temp_factor = min(temperature / self.base_temperature, 2.0)  # Scale by temperature, cap at 2x
             
             scale = self.noise_scale * path_factor * step_factor * temp_factor
         else:
@@ -256,26 +291,29 @@ class InitializationDiversityStrategy(DiversityStrategy):
     layers' hidden states as starting points.
     
     Attributes:
+        base_temperature: Baseline temperature value (inherited from DiversityStrategy)
         perturbation_scale: Scale of initial perturbation
         use_layer_variation: Whether to use different layers for initialization
     """
     
     def __init__(
         self,
+        base_temperature: float = 0.7,
         perturbation_scale: float = 0.05,
         use_layer_variation: bool = False
     ):
         """Initialize initialization diversity strategy.
         
         Args:
+            base_temperature: Baseline temperature for generating temperature series
             perturbation_scale: Scale of initial perturbation
             use_layer_variation: Use different layers for different paths
         """
+        super().__init__(base_temperature=base_temperature)
         self.perturbation_scale = perturbation_scale
         self.use_layer_variation = use_layer_variation
-        logger.debug(f"[InitializationDiversityStrategy] Initialized with "
-                    f"perturbation_scale={perturbation_scale}, "
-                    f"use_layer_variation={use_layer_variation}")
+        logger.info(f"[InitializationDiversityStrategy] Initialized with base_temperature={base_temperature}, "
+                   f"perturbation_scale={perturbation_scale}, use_layer_variation={use_layer_variation}")
     
     def apply(
         self,
@@ -316,35 +354,40 @@ class HybridDiversityStrategy(DiversityStrategy):
     Applies multiple diversity strategies in sequence or with weighted combination.
     
     Attributes:
+        base_temperature: Baseline temperature value (inherited from DiversityStrategy)
         strategies: List of (strategy, weight) tuples
         combination_mode: How to combine strategies ('sequential' or 'weighted')
     """
     
     def __init__(
         self,
+        base_temperature: float = 0.7,
         strategies: Optional[List[tuple]] = None,
         combination_mode: str = 'sequential'
     ):
         """Initialize hybrid diversity strategy.
         
         Args:
+            base_temperature: Baseline temperature for generating temperature series
             strategies: List of (strategy, weight) tuples
             combination_mode: 'sequential' applies strategies in order,
                             'weighted' combines their effects
         """
+        super().__init__(base_temperature=base_temperature)
         self.strategies = strategies or []
         self.combination_mode = combination_mode
         
         if not self.strategies:
             # Default: combine temperature and noise strategies with increased diversity
-            logger.info("[HybridDiversityStrategy] No strategies provided, using default combination")
+            logger.info(f"[HybridDiversityStrategy] No strategies provided, using default combination "
+                       f"with base_temperature={base_temperature}")
             self.strategies = [
-                (TemperatureDiversityStrategy(noise_scale=0.2), 0.5),
-                (NoiseDiversityStrategy(noise_scale=0.3, continuous=True), 0.5)
+                (TemperatureDiversityStrategy(base_temperature=base_temperature, noise_scale=0.2), 0.5),
+                (NoiseDiversityStrategy(base_temperature=base_temperature, noise_scale=0.3, continuous=True), 0.5)
             ]
         
-        logger.info(f"[HybridDiversityStrategy] Initialized with {len(self.strategies)} strategies, "
-                   f"mode={combination_mode}")
+        logger.info(f"[HybridDiversityStrategy] Initialized with base_temperature={base_temperature}, "
+                   f"{len(self.strategies)} strategies, mode={combination_mode}")
         for i, (strategy, weight) in enumerate(self.strategies):
             logger.debug(f"[HybridDiversityStrategy] Strategy {i}: {strategy.__class__.__name__} (weight={weight:.3f})")
     
@@ -417,46 +460,51 @@ class HybridDiversityStrategy(DiversityStrategy):
     def get_temperature(self, path_index: int, total_paths: int) -> float:
         """Get temperature from temperature-based sub-strategies.
         
+        Uses baseline temperature to generate temperature series.
+        
         Args:
             path_index: Index of current path
             total_paths: Total number of paths
             
         Returns:
-            Temperature value (from first temperature strategy found)
+            Temperature value (from first temperature strategy found, or base class method)
         """
         for strategy, _ in self.strategies:
             if isinstance(strategy, TemperatureDiversityStrategy):
                 return strategy.get_temperature(path_index, total_paths)
         
-        # Default temperature if no temperature strategy found
-        return 0.7 + 0.6 * (path_index / max(1, total_paths - 1))
+        # Use base class method which uses baseline temperature
+        return super().get_temperature(path_index, total_paths)
 
 
 def create_diversity_strategy(
     strategy_type: str = 'hybrid',
+    base_temperature: float = 0.7,
     **kwargs
 ) -> DiversityStrategy:
     """Factory function to create diversity strategies.
     
     Args:
         strategy_type: Type of strategy ('temperature', 'noise', 'initialization', 'hybrid')
+        base_temperature: Baseline temperature for generating temperature series (default: 0.7)
         **kwargs: Strategy-specific parameters
         
     Returns:
         Diversity strategy instance
     """
-    logger.info(f"[DiversityStrategyFactory] Creating strategy: {strategy_type}")
+    logger.info(f"[DiversityStrategyFactory] Creating strategy: {strategy_type} "
+               f"with base_temperature={base_temperature}")
     
     if strategy_type == 'temperature':
-        return TemperatureDiversityStrategy(**kwargs)
+        return TemperatureDiversityStrategy(base_temperature=base_temperature, **kwargs)
     elif strategy_type == 'noise':
-        return NoiseDiversityStrategy(**kwargs)
+        return NoiseDiversityStrategy(base_temperature=base_temperature, **kwargs)
     elif strategy_type == 'initialization':
-        return InitializationDiversityStrategy(**kwargs)
+        return InitializationDiversityStrategy(base_temperature=base_temperature, **kwargs)
     elif strategy_type == 'hybrid':
-        return HybridDiversityStrategy(**kwargs)
+        return HybridDiversityStrategy(base_temperature=base_temperature, **kwargs)
     else:
         logger.warning(f"[DiversityStrategyFactory] Unknown strategy type: {strategy_type}, "
                       f"defaulting to hybrid")
-        return HybridDiversityStrategy(**kwargs)
+        return HybridDiversityStrategy(base_temperature=base_temperature, **kwargs)
 

@@ -190,8 +190,8 @@ def main_direct():
         
         # Generation parameters
         "max_new_tokens": 2048,  # Maximum tokens to generate
-        "latent_steps": 10,  # Number of latent steps (for latent_mas and latent_mas_multipath)
-        "temperature": 1.2,  # Sampling temperature
+        "latent_steps": 5,  # Number of latent steps (for latent_mas and latent_mas_multipath)
+        "temperature": 0.6,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
         "top_p": 0.95,  # Top-p sampling parameter
         "generate_bs": 20,  # Batch size for generation
         
@@ -213,7 +213,7 @@ def main_direct():
                                  # Higher = only merge very similar paths, Lower = merge more aggressively
         "branch_threshold": 0.5,  # Uncertainty threshold for branching (0.0-1.0)
                                   # Higher = branch less often, Lower = branch more often
-        "diversity_strategy": "temperature",  # Options: "temperature", "noise", "hybrid"
+        "diversity_strategy": "hybrid",  # Options: "temperature", "noise", "hybrid"
                                         # - "temperature": Use different temperatures per path
                                         # - "noise": Add noise to hidden states
                                         # - "hybrid": Combine both strategies (recommended)
@@ -274,6 +274,15 @@ def main_direct():
         args.use_second_HF_model = True
         args.enable_prefix_caching = True
         logger.info(f"Auto-enabled vLLM-specific settings for {args.method}")
+    
+    # Log temperature configuration
+    logger.info("=" * 80)
+    logger.info("[Temperature Configuration]")
+    logger.info(f"  Baseline temperature: {args.temperature}")
+    logger.info(f"  This baseline will be used to generate a series of temperatures")
+    logger.info(f"  for diversity strategies in multi-path reasoning")
+    logger.info(f"  Temperature range: [{args.temperature - 0.3:.2f}, {args.temperature + 0.3:.2f}]")
+    logger.info("=" * 80)
     
     # Log multi-path configuration if using latent_mas_multipath
     if args.method == "latent_mas_multipath":

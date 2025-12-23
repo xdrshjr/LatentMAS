@@ -127,9 +127,10 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         self.reasoning_graph = ReasoningGraph()
         logger.debug("[LatentMASMultiPathMethod] Initialized ReasoningGraph")
         
-        # Initialize diversity strategy
-        self.diversity_strategy = self._create_diversity_strategy(diversity_strategy)
-        logger.debug(f"[LatentMASMultiPathMethod] Created diversity strategy: {diversity_strategy}")
+        # Initialize diversity strategy with baseline temperature
+        self.diversity_strategy = self._create_diversity_strategy(diversity_strategy, temperature)
+        logger.info(f"[LatentMASMultiPathMethod] Created diversity strategy: {diversity_strategy} "
+                   f"with baseline temperature: {temperature}")
         
         # Initialize scoring metrics
         if scoring_weights is None:
@@ -193,25 +194,29 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         )
         logger.debug(f"[LatentMASMultiPathMethod] Initialized PathMerger with threshold: {merge_threshold}")
     
-    def _create_diversity_strategy(self, strategy_name: str):
-        """Create diversity strategy based on name.
+    def _create_diversity_strategy(self, strategy_name: str, base_temperature: float):
+        """Create diversity strategy based on name with baseline temperature.
         
         Args:
             strategy_name: Name of the diversity strategy
+            base_temperature: Baseline temperature for generating temperature series
             
         Returns:
             Diversity strategy instance
         """
+        logger.info(f"[LatentMASMultiPathMethod] Creating diversity strategy '{strategy_name}' "
+                   f"with base_temperature={base_temperature}")
+        
         if strategy_name == "temperature":
-            return TemperatureDiversityStrategy()
+            return TemperatureDiversityStrategy(base_temperature=base_temperature)
         elif strategy_name == "noise":
-            return NoiseDiversityStrategy()
+            return NoiseDiversityStrategy(base_temperature=base_temperature)
         elif strategy_name == "hybrid":
-            return HybridDiversityStrategy()
+            return HybridDiversityStrategy(base_temperature=base_temperature)
         else:
             logger.warning(f"[LatentMASMultiPathMethod] Unknown diversity strategy '{strategy_name}', "
-                         f"using 'hybrid' as default")
-            return HybridDiversityStrategy()
+                         f"using 'hybrid' as default with base_temperature={base_temperature}")
+            return HybridDiversityStrategy(base_temperature=base_temperature)
     
     def _create_pruning_strategy(self, strategy_name: str):
         """Create pruning strategy based on name.

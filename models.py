@@ -473,17 +473,12 @@ class ModelWrapper:
         
         paths = []
         
-        for path_idx in range(num_paths):
+        for path_idx in range(num_paths):   # 遍历10条路径，每条路径都有5个latent思考步骤
             logger.info(f"[Path Generation] Starting path {path_idx + 1}/{num_paths}")
             
             # Get temperature for this path (will be used for diversity)
             temperature = diversity_strategy.get_temperature(path_idx, num_paths)
             logger.debug(f"[Path Generation] Path {path_idx + 1} temperature: {temperature:.4f}")
-            
-            # Set random seed based on path index for reproducible diversity
-            if path_idx > 0:
-                torch.manual_seed(42 + path_idx)
-                logger.debug(f"[Path Generation] Path {path_idx + 1}: set random seed to {42 + path_idx}")
             
             # Generate initial hidden states
             if past_key_values is not None:
@@ -510,7 +505,7 @@ class ModelWrapper:
             )
             
             past = outputs.past_key_values
-            last_hidden = outputs.hidden_states[-1][:, -1, :]
+            last_hidden = outputs.hidden_states[-1][:, -1, :]   # [index, hidden_dim], [1, 1024]
             
             # Apply diversity strategy to initial hidden state
             last_hidden = diversity_strategy.apply(
@@ -520,7 +515,7 @@ class ModelWrapper:
                 step=0,
                 total_steps=latent_steps,
                 temperature=temperature
-            )
+            )   # step-0 do not use diversity
             
             # Track latent history for this path
             latent_history = []
@@ -530,7 +525,7 @@ class ModelWrapper:
                 logger.debug(f"[Path Generation] Path {path_idx + 1}, latent step {step + 1}/{latent_steps}")
                 
                 # Apply diversity at each step for continuous differentiation
-                if path_idx > 0:
+                if path_idx > 0:    # path-0不需要进行diversity变换，作为基准
                     last_hidden = diversity_strategy.apply(
                         last_hidden,
                         path_idx,
@@ -568,12 +563,12 @@ class ModelWrapper:
                     use_cache=True,
                     output_hidden_states=True,
                     return_dict=True,
-                )
+                )   # 不断进行latent思考，通过循环控制
                 
                 past = outputs.past_key_values
                 last_hidden = outputs.hidden_states[-1][:, -1, :]
             
-            # Store path information
+            # Store path information, 思考5步后，latent_history存储了所有latent的vector: [[1, 1024], [1, 1024], [1, 1024], [1, 1024], [1, 1024]]
             path_info = {
                 'path_id': path_idx,
                 'latent_history': latent_history,
