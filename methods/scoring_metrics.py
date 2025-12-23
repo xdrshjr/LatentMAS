@@ -1201,17 +1201,21 @@ class LatentConsistencyScorer(BaseScorer):
         return float(max(0.0, min(1.0, score)))
 
     def score_individual_paths(self, path_states: List[Any], **kwargs) -> List[float]:
-        """为每个路径计算与共识的对齐分数
-        
+        """为每个路径计算一致性分数(基于成对相似度的矩阵运算)
+
+        Computes consistency scores for each path based on its average similarity
+        to other paths. Higher scores indicate paths that are more consistent
+        with the ensemble.
+
         Args:
             path_states: List of path states
             **kwargs: Additional arguments
-            
+
         Returns:
-            List of individual scores for each path
+            List of consistency scores for each path (0-1, higher = more consistent)
         """
         logger.debug(f"[LatentConsistencyScorer] Computing individual path scores for {len(path_states)} paths")
-        
+
         latent_vectors = []
         valid_indices = []
 
@@ -1220,44 +1224,105 @@ class LatentConsistencyScorer(BaseScorer):
             if vec is not None:
                 latent_vectors.append(vec)
                 valid_indices.append(i)
-                logger.debug(f"[LatentConsistencyScorer] Path {i}: extracted latent vector")
 
         if len(latent_vectors) < 2:
-            logger.info(f"[LatentConsistencyScorer] Insufficient vectors for individual scoring, returning default scores")
+            logger.info(f"[LatentConsistencyScorer] Insufficient vectors for individual scoring")
             return [0.5] * len(path_states)
 
-        # 计算质心
-        centroid = torch.stack(latent_vectors).mean(dim=0)
-        logger.debug(f"[LatentConsistencyScorer] Computed centroid for individual scoring")
+        # 将所有向量堆叠成矩阵 [N, D]
+        X = torch.stack(latent_vectors).float()  # shape: [N, D]
+        n_paths = X.shape[0]
 
-        # 为每个路径计算与质心的相似度
-        individual_scores_valid = []
-        for i, vec in enumerate(latent_vectors):
-            if self.similarity_metric == 'cosine':
-                sim = F.cosine_similarity(vec.unsqueeze(0), centroid.unsqueeze(0)).item()
-                score = (sim + 1.0) / 2.0  # 映射到 [0, 1]
-                logger.debug(f"[LatentConsistencyScorer] Path {valid_indices[i]} cosine score: {score:.4f}")
-            elif self.similarity_metric == 'kl_divergence':
-                # Compute KL divergence to centroid
-                eps = 1e-10
-                p = F.softmax(vec, dim=0) + eps
-                q = F.softmax(centroid, dim=0) + eps
-                p = p / p.sum()
-                q = q / q.sum()
-                kl_div = torch.sum(p * torch.log(p / q)).item()
-                # Convert to similarity score
-                score = np.exp(-kl_div)
-                logger.debug(f"[LatentConsistencyScorer] Path {valid_indices[i]} KL divergence score: {score:.4f}")
-            elif self.similarity_metric == 'euclidean' or self.similarity_metric == 'l2':
-                dist = torch.norm(vec - centroid).item()
-                # 转换为相似度分数
-                score = 1.0 / (1.0 + dist)  # 或使用 np.exp(-dist / scale)
-                logger.debug(f"[LatentConsistencyScorer] Path {valid_indices[i]} {self.similarity_metric} score: {score:.4f}")
-            else:
-                logger.warning(f"[LatentConsistencyScorer] Unknown metric '{self.similarity_metric}', using default score")
-                score = 0.5
+        logger.debug(f"[LatentConsistencyScorer] Computing pairwise similarity matrix for {n_paths} paths")
 
-            individual_scores_valid.append(score)
+        # 根据度量类型计算成对相似度矩阵
+        if self.similarity_metric == 'cosine':
+            # 余弦相似度矩阵计算
+            # cosine_sim(i,j) = (x_i · x_j) / (||x_i|| * ||x_j||)
+            X_norm = F.normalize(X, p=2, dim=1)  # L2 归一化
+            similarity_matrix = torch.mm(X_norm, X_norm.t())  # [N, N]
+            # 映射到 [0, 1]
+            similarity_matrix = (similarity_matrix + 1.0) / 2.0
+
+        elif self.similarity_metric == 'kl_divergence':
+            # KL 散度矩阵计算（使用对称 KL 散度）
+            eps = 1e-10
+
+            # 将所有向量转换为概率分布
+            P = F.softmax(X, dim=1) + eps  # [N, D]
+            P = P / P.sum(dim=1, keepdim=True)  # 重新归一化
+
+            # 计算对称 KL 散度：(KL(P||Q) + KL(Q||P)) / 2
+            # 使用 log 空间计算以提高数值稳定性
+            log_P = torch.log(P)  # [N, D]
+
+            # 扩展维度用于广播
+            P_expanded = P.unsqueeze(1)  # [N, 1, D]
+            log_P_expanded = log_P.unsqueeze(1)  # [N, 1, D]
+            log_Q_expanded = log_P.unsqueeze(0)  # [1, N, D]
+            Q_expanded = P.unsqueeze(0)  # [1, N, D]
+
+            # KL(P||Q) = sum(P * log(P/Q))
+            kl_pq = torch.sum(P_expanded * (log_P_expanded - log_Q_expanded), dim=2)  # [N, N]
+            # KL(Q||P) = sum(Q * log(Q/P))
+            kl_qp = torch.sum(Q_expanded * (log_Q_expanded - log_P_expanded), dim=2)  # [N, N]
+
+            # 对称 KL 散度
+            symmetric_kl = (kl_pq + kl_qp) / 2.0
+
+            # 转换为相似度分数
+            similarity_matrix = torch.exp(-symmetric_kl)  # [N, N]
+
+        elif self.similarity_metric == 'euclidean' or self.similarity_metric == 'l2':
+            # 欧氏距离矩阵计算
+            # 使用 PyTorch 的 cdist 函数（更高效且数值稳定）
+            distance_matrix = torch.cdist(X, X, p=2)  # [N, N]
+
+            # 转换为相似度分数
+            similarity_matrix = 1.0 / (1.0 + distance_matrix)  # [N, N]
+
+        else:
+            logger.warning(f"[LatentConsistencyScorer] Unknown metric '{self.similarity_metric}', using default")
+            return [0.5] * len(path_states)
+
+        # 屏蔽对角线（不与自己比较）
+        mask = torch.eye(n_paths, device=similarity_matrix.device, dtype=torch.bool)
+        similarity_matrix_masked = similarity_matrix.clone()
+        similarity_matrix_masked[mask] = 0.0
+
+        # 计算每个路径与其他路径的平均相似度
+        avg_similarities = similarity_matrix_masked.sum(dim=1) / (n_paths - 1)
+
+        # 转换为 numpy 数组
+        diversity_scores = avg_similarities.cpu().float().numpy()
+
+        # 归一化到 [0, 1] 并增强区分度
+        score_range = diversity_scores.max() - diversity_scores.min()
+
+        if score_range > 1e-6:
+            # Min-max 归一化
+            diversity_scores = (diversity_scores - diversity_scores.min()) / score_range
+
+            # 可选：应用非线性变换增强差异（取消注释以启用）
+            # diversity_scores = np.power(diversity_scores, 0.5)  # 平方根拉开差距
+
+            logger.info(f"[LatentConsistencyScorer] Score range after normalization: "
+                        f"[{diversity_scores.min():.4f}, {diversity_scores.max():.4f}]")
+        else:
+            # 路径缺乏多样性
+            logger.warning(f"[LatentConsistencyScorer] CRITICAL: Very low diversity detected! "
+                           f"Raw score range: {score_range:.8f}")
+            logger.warning(f"[LatentConsistencyScorer] All paths are nearly identical - "
+                           f"diversity strategy may have failed")
+            diversity_scores = np.ones_like(diversity_scores) * 0.5
+
+        individual_scores_valid = diversity_scores.tolist()
+
+        # 详细日志
+        for i, score in enumerate(individual_scores_valid):
+            logger.debug(f"[LatentConsistencyScorer] Path {valid_indices[i]}: "
+                         f"avg_similarity={avg_similarities[i].item():.6f}, "
+                         f"normalized_score={score:.4f}")
 
         # 构建完整分数列表
         individual_scores = []
@@ -1269,7 +1334,16 @@ class LatentConsistencyScorer(BaseScorer):
             else:
                 individual_scores.append(0.5)
 
-        logger.info(f"[LatentConsistencyScorer] Computed {len(individual_scores)} individual scores (metric: {self.similarity_metric})")
+        # 统计信息
+        logger.info(f"[LatentConsistencyScorer] Path scoring complete - "
+                    f"metric: {self.similarity_metric}, "
+                    f"paths: {len(individual_scores_valid)}")
+        logger.info(f"[LatentConsistencyScorer] Score statistics - "
+                    f"min: {min(individual_scores_valid):.4f}, "
+                    f"max: {max(individual_scores_valid):.4f}, "
+                    f"mean: {np.mean(individual_scores_valid):.4f}, "
+                    f"std: {np.std(individual_scores_valid):.4f}")
+
         return individual_scores
 
 

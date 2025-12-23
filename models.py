@@ -525,16 +525,15 @@ class ModelWrapper:
                 logger.debug(f"[Path Generation] Path {path_idx + 1}, latent step {step + 1}/{latent_steps}")
                 
                 # Apply diversity at each step for continuous differentiation
-                if path_idx > 0:    # path-0不需要进行diversity变换，作为基准
-                    last_hidden = diversity_strategy.apply(
-                        last_hidden,
-                        path_idx,
-                        num_paths,
-                        step=step + 1,
-                        total_steps=latent_steps,
-                        temperature=temperature
-                    )
-                    logger.debug(f"[Path Generation] Path {path_idx + 1}, step {step + 1}: Applied diversity transformation")
+                last_hidden = diversity_strategy.apply(
+                    last_hidden,
+                    path_idx,
+                    num_paths,
+                    step=step + 1,
+                    total_steps=latent_steps,
+                    temperature=temperature
+                )
+                logger.debug(f"[Path Generation] Path {path_idx + 1}, step {step + 1}: Applied diversity transformation")
                 
                 # Apply latent realignment
                 source_model = self.HF_model if hasattr(self, "HF_model") else self.model

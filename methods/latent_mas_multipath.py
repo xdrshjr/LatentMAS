@@ -444,7 +444,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             latent_steps=self.latent_steps,
                             diversity_strategy=self.diversity_strategy,
                             past_key_values=past_kv,
-                        )
+                        )   # 获取多样的推理路径，10条路径，每条路径有5个latent思考步骤
                     
                     # Convert to PathState objects
                     new_paths = []
