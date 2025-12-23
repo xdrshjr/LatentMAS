@@ -189,7 +189,7 @@ def main_direct():
         "split": "test",  # Split name (not used in custom mode, but required)
         
         # Generation parameters
-        "max_new_tokens": 1024,  # Maximum tokens to generate
+        "max_new_tokens": 2048,  # Maximum tokens to generate
         "latent_steps": 10,  # Number of latent steps (for latent_mas and latent_mas_multipath)
         "temperature": 0.6,  # Sampling temperature
         "top_p": 0.95,  # Top-p sampling parameter
@@ -204,7 +204,7 @@ def main_direct():
         "num_paths": 10,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
         "enable_branching": True,  # Enable adaptive branching based on uncertainty
         "enable_merging": True,  # Enable path merging for efficiency (reduces redundant computation)
-        "pruning_strategy": "topk",  # Options: "topk", "adaptive", "diversity", "budget"
+        "pruning_strategy": "adaptive",  # Options: "topk", "adaptive", "diversity", "budget"
                                          # - "topk": Keep top-k paths by score (simple, fast)
                                          # - "adaptive": Adjust pruning rate by progress (recommended)
                                          # - "diversity": Balance score and diversity (good for exploration)
@@ -238,11 +238,27 @@ def main_direct():
         "tensor_parallel_size": 1,  # Tensor parallel size
         "gpu_memory_utilization": 0.9,  # GPU memory utilization
         "log_level": "INFO",  # Logging level: "DEBUG", "INFO", "WARNING", "ERROR"
+        
+        # Visualization parameters
+        "enable_visualization": False,  # Enable/disable visualization graph generation
+                                       # Set to False to skip visualization and save time
     }
     
     logger.info("Hardcoded parameters:")
     for key, value in args_dict.items():
         logger.info(f"  {key}: {value}")
+    
+    # Log visualization setting prominently
+    if args_dict.get('enable_visualization', True):
+        logger.info("=" * 80)
+        logger.info("Visualization generation: ENABLED")
+        logger.info("Graphs will be generated in output/visualizations/")
+        logger.info("=" * 80)
+    else:
+        logger.info("=" * 80)
+        logger.info("Visualization generation: DISABLED")
+        logger.info("No visualization graphs will be generated")
+        logger.info("=" * 80)
     
     # Convert dict to argparse.Namespace
     args = argparse.Namespace(**args_dict)
