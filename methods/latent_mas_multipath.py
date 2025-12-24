@@ -325,12 +325,30 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         batch_size = len(items)
         logger.info(f"Processing batch of {batch_size} items with {self.num_paths} paths per item")
         
+        # CRITICAL: Clear PathManager before batch to ensure complete independence between batches
+        # This prevents cross-batch accumulation of paths and GPU memory leaks
+        if len(self.path_manager.paths) > 0:
+            logger.warning(f"[Memory Leak Prevention] PathManager has {len(self.path_manager.paths)} paths before batch start - clearing now")
+            self.path_manager.clear()
+            
+            # Force GPU cleanup after clearing
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                logger.info(f"[Memory Leak Prevention] Forced GPU cleanup after PathManager clear")
+        
+        # Reset reasoning graph to ensure clean state
+        if self.reasoning_graph is not None and len(self.reasoning_graph.nodes) > 0:
+            logger.warning(f"[Memory Leak Prevention] ReasoningGraph has {len(self.reasoning_graph.nodes)} nodes before batch start - clearing now")
+            self.reasoning_graph.clear()
+            self.reasoning_graph = ReasoningGraph()
+        
         # Log GPU memory before batch processing
         if torch.cuda.is_available():
             gpu_mem_allocated = torch.cuda.memory_allocated() / 1024**3
             gpu_mem_reserved = torch.cuda.memory_reserved() / 1024**3
-            logger.info(f"[GPU Memory] Before batch: allocated={gpu_mem_allocated:.2f}GB, reserved={gpu_mem_reserved:.2f}GB")
-            logger.info(f"[PathManager] Paths in manager before batch: {len(self.path_manager.paths)}")
+            logger.info(f"[GPU Memory] Before batch (after pre-cleanup): allocated={gpu_mem_allocated:.2f}GB, reserved={gpu_mem_reserved:.2f}GB")
+            logger.info(f"[PathManager] Paths in manager after pre-cleanup: {len(self.path_manager.paths)}")
             logger.debug(f"[PathManager] Active paths: {len(self.path_manager.active_paths)}")
         
         # Initialize paths for each item in batch
@@ -404,10 +422,16 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                 wrapped_ids = wrapped_encoded["input_ids"].to(self.model.device)
                 wrapped_mask = wrapped_encoded["attention_mask"].to(self.model.device)
                 
-                # Process each item in batch
+                    # Process each item in batch
                 for batch_idx in range(batch_size):
                     logger.info(f"[{agent.name}] Processing item {batch_idx + 1}/{batch_size}")
                     logger.info(f"[{agent.name}] Question: {items[batch_idx]['question']}")
+                    
+                    # Log GPU memory at start of item processing
+                    if torch.cuda.is_available():
+                        gpu_mem_item_start = torch.cuda.memory_allocated() / 1024**3
+                        gpu_mem_reserved_start = torch.cuda.memory_reserved() / 1024**3
+                        logger.info(f"[GPU Memory] Item {batch_idx + 1} start: allocated={gpu_mem_item_start:.2f}GB, reserved={gpu_mem_reserved_start:.2f}GB")
                     
                     # Get input for this item
                     item_ids = wrapped_ids[batch_idx:batch_idx+1]
@@ -469,16 +493,27 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     for path_dict in path_dicts:
                         path_id = self.path_manager.next_path_id
                         self.path_manager.next_path_id += 1
+                        
+                        # Clean metadata to avoid tensor references
+                        clean_metadata = {}
+                        for k, v in path_dict.get('metadata', {}).items():
+                            # Only store non-tensor metadata
+                            if not isinstance(v, torch.Tensor):
+                                clean_metadata[k] = v
+                        
                         path_state = PathState(
                             path_id=path_id,
                             latent_history=path_dict['latent_history'],
                             hidden_states=path_dict['hidden_states'],
                             kv_cache=path_dict['kv_cache'],
-                            metadata=path_dict.get('metadata', {}),
+                            metadata=clean_metadata,
                         )
                         new_paths.append(path_state)
                         self.path_manager.paths[path_id] = path_state
                         logger.debug(f"[LatentMASMultiPathMethod.run_batch] Created path {path_id}")
+                    
+                    # Clean up path_dicts to free references
+                    del path_dicts
                     
                     # Score all paths
                     if torch.cuda.is_available():
@@ -531,6 +566,15 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         del individual_consistency_scores
                         logger.debug(f"[{agent.name}] Cleaned up consistency scores list")
                     
+                    # Clean up any temporary tensors in path metadata to prevent references
+                    for path in new_paths:
+                        if path.metadata:
+                            # Remove any tensor references from metadata
+                            keys_to_remove = [k for k, v in path.metadata.items() if isinstance(v, torch.Tensor)]
+                            for k in keys_to_remove:
+                                del path.metadata[k]
+                                logger.debug(f"[{agent.name}] Removed tensor reference '{k}' from path {path.path_id} metadata")
+                    
                     # Immediate GPU cleanup after scoring (scoring creates many temporary tensors)
                     if torch.cuda.is_available():
                         gpu_mem_after_score = torch.cuda.memory_allocated() / 1024**3
@@ -539,6 +583,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                                    f"(+{mem_increase_score:.2f}GB during scoring)")
                         
                         torch.cuda.empty_cache()
+                        torch.cuda.synchronize()  # Force synchronization to ensure cleanup
                         gpu_mem_after_cleanup = torch.cuda.memory_allocated() / 1024**3
                         mem_freed = gpu_mem_after_score - gpu_mem_after_cleanup
                         logger.debug(f"[GPU Memory] After scoring cleanup: {gpu_mem_after_cleanup:.2f}GB "
@@ -611,8 +656,14 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         "output": "",
                     })
                     
-                    # Clean up temporary scoring data
+                    # Clean up temporary scoring data and other item-specific variables
                     del final_path_scores, final_paths_info
+                    
+                    # Force GPU cache cleanup after each item to prevent cross-item accumulation
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+                        logger.debug(f"[{agent.name}] GPU cache cleaned after processing item {batch_idx + 1}")
                     
                     # Clean up pruned paths to free GPU memory immediately
                     # Keep only the paths that survived pruning/merging
@@ -654,6 +705,18 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             mem_freed_prune = gpu_mem_before_prune - gpu_mem_after_prune_cleanup
                             logger.info(f"[{agent.name}] GPU memory after pruning cleanup: {gpu_mem_after_prune_cleanup:.2f}GB "
                                        f"(freed {mem_freed_prune:.2f}GB by removing {len(paths_to_remove_ids)} paths)")
+                    
+                    # Log GPU memory at end of item processing
+                    if torch.cuda.is_available():
+                        gpu_mem_item_end = torch.cuda.memory_allocated() / 1024**3
+                        gpu_mem_reserved_end = torch.cuda.memory_reserved() / 1024**3
+                        gpu_mem_item_delta = gpu_mem_item_end - gpu_mem_item_start
+                        logger.info(f"[GPU Memory] Item {batch_idx + 1} end: allocated={gpu_mem_item_end:.2f}GB, reserved={gpu_mem_reserved_end:.2f}GB")
+                        logger.info(f"[GPU Memory] Item {batch_idx + 1} delta: {gpu_mem_item_delta:+.3f}GB")
+                        
+                        # Warning if memory increased significantly
+                        if gpu_mem_item_delta > 0.5:
+                            logger.warning(f"[GPU Memory] Item {batch_idx + 1} caused significant memory increase: {gpu_mem_item_delta:.2f}GB - potential memory leak!")
                 
                 # Agent-level GPU memory cleanup (after processing all items for this agent)
                 logger.info(f"[Memory Cleanup] Agent {agent_idx + 1}/{len(self.agents)} ({agent.name}) processing complete")
@@ -688,6 +751,11 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                 for batch_idx in range(batch_size):
                     item_paths = batch_paths[batch_idx]
                     
+                    # Log GPU memory before judger processing
+                    if torch.cuda.is_available():
+                        gpu_mem_judger_start = torch.cuda.memory_allocated() / 1024**3
+                        logger.debug(f"[GPU Memory] Judger item {batch_idx + 1} start: {gpu_mem_judger_start:.2f}GB")
+                    
                     logger.info(f"[{agent.name}] Aggregating paths for item {batch_idx + 1}/{batch_size}")
                     logger.info(f"[{agent.name}] Available paths: {len(item_paths)}")
                     
@@ -713,7 +781,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         for path_idx, path in enumerate(item_paths):
                             logger.debug(f"[{agent.name}] Generating answer from path {path.path_id} (score: {path.score:.4f})")
                             # Generate answer from this path
-                            generated_batch, _ = self.model.generate_text_batch(
+                            generated_batch, new_kv_cache = self.model.generate_text_batch(
                                 judger_ids[batch_idx:batch_idx+1],
                                 judger_mask[batch_idx:batch_idx+1],
                                 max_new_tokens=self.judger_max_new_tokens,
@@ -726,6 +794,11 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             path_scores.append(path.score)
                             logger.info(f"[{agent.name}] Path {path.path_id} generated answer: {answer}")
                             logger.debug(f"[{agent.name}] Path {path.path_id} answer length: {len(answer)} chars")
+                            
+                            # Immediately clean up the new KV cache from generation to prevent accumulation
+                            # We don't need it after getting the answer
+                            if new_kv_cache is not None:
+                                del new_kv_cache
                         
                         # Voting: weight by path scores
                         logger.info(f"[{agent.name}] Performing weighted voting across {len(path_answers)} answers")
@@ -743,6 +816,12 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         
                         logger.info(f"[{agent.name}] Selected final answer: {best_answer}")
                         logger.info(f"[{agent.name}] Winning vote weight: {answer_votes[best_answer]:.4f}")
+                    
+                    # Log GPU memory after judger processing
+                    if torch.cuda.is_available():
+                        gpu_mem_judger_end = torch.cuda.memory_allocated() / 1024**3
+                        gpu_mem_judger_delta = gpu_mem_judger_end - gpu_mem_judger_start
+                        logger.debug(f"[GPU Memory] Judger item {batch_idx + 1} end: {gpu_mem_judger_end:.2f}GB (delta: {gpu_mem_judger_delta:+.3f}GB)")
                     
                     # Record judger trace
                     logger.debug(f"[{agent.name}] Recording trace for item {batch_idx + 1}")
@@ -930,12 +1009,30 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         batch_size = len(items)
         logger.info(f"Processing batch of {batch_size} items with {self.num_paths} paths per item (vLLM)")
         
+        # CRITICAL: Clear PathManager before batch to ensure complete independence between batches
+        # This prevents cross-batch accumulation of paths and GPU memory leaks
+        if len(self.path_manager.paths) > 0:
+            logger.warning(f"[Memory Leak Prevention][vLLM] PathManager has {len(self.path_manager.paths)} paths before batch start - clearing now")
+            self.path_manager.clear()
+            
+            # Force GPU cleanup after clearing
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                logger.info(f"[Memory Leak Prevention][vLLM] Forced GPU cleanup after PathManager clear")
+        
+        # Reset reasoning graph to ensure clean state
+        if self.reasoning_graph is not None and len(self.reasoning_graph.nodes) > 0:
+            logger.warning(f"[Memory Leak Prevention][vLLM] ReasoningGraph has {len(self.reasoning_graph.nodes)} nodes before batch start - clearing now")
+            self.reasoning_graph.clear()
+            self.reasoning_graph = ReasoningGraph()
+        
         # Log GPU memory before batch processing
         if torch.cuda.is_available():
             gpu_mem_allocated = torch.cuda.memory_allocated() / 1024**3
             gpu_mem_reserved = torch.cuda.memory_reserved() / 1024**3
-            logger.info(f"[GPU Memory][vLLM] Before batch: allocated={gpu_mem_allocated:.2f}GB, reserved={gpu_mem_reserved:.2f}GB")
-            logger.debug(f"[PathManager][vLLM] Paths in manager before batch: {len(self.path_manager.paths)}")
+            logger.info(f"[GPU Memory][vLLM] Before batch (after pre-cleanup): allocated={gpu_mem_allocated:.2f}GB, reserved={gpu_mem_reserved:.2f}GB")
+            logger.debug(f"[PathManager][vLLM] Paths in manager after pre-cleanup: {len(self.path_manager.paths)}")
         
         # Initialize paths for each item in batch
         batch_paths: List[List[PathState]] = [[] for _ in range(batch_size)]

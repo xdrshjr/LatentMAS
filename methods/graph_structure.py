@@ -574,9 +574,16 @@ class ReasoningGraph:
             
             # Delete KV cache (recursively)
             if node.kv_cache is not None:
-                tensor_count += 1
-                self._deep_clean_kv_cache(node.kv_cache)
+                kv_tensors = self._deep_clean_kv_cache(node.kv_cache)
+                tensor_count += kv_tensors
                 node.kv_cache = None
+            
+            # Clean metadata to remove any tensor references
+            if node.metadata:
+                for key in list(node.metadata.keys()):
+                    if isinstance(node.metadata[key], torch.Tensor):
+                        del node.metadata[key]
+                        tensor_count += 1
         
         # Clear all data structures
         self.nodes.clear()
@@ -586,8 +593,14 @@ class ReasoningGraph:
         
         logger.info(f"[ReasoningGraph] Cleared {num_nodes} nodes and freed {tensor_count} tensor references")
         logger.debug(f"[ReasoningGraph] Graph state after clear: nodes={len(self.nodes)}, edges={len(self.edges)}")
+        
+        # Force GPU cache cleanup and synchronization after clearing graph
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            logger.debug(f"[ReasoningGraph] Forced GPU cleanup after clearing {num_nodes} nodes")
     
-    def _deep_clean_kv_cache(self, kv_cache: Any) -> None:
+    def _deep_clean_kv_cache(self, kv_cache: Any) -> int:
         """Recursively clean KV cache structure.
         
         KV cache is a nested structure of tuples/lists containing tensors.
@@ -595,15 +608,36 @@ class ReasoningGraph:
         
         Args:
             kv_cache: KV cache structure to clean
+            
+        Returns:
+            Number of tensors cleaned
         """
         if kv_cache is None:
-            return
+            return 0
+        
+        tensor_count = 0
         
         if isinstance(kv_cache, torch.Tensor):
             del kv_cache
+            return 1
         elif isinstance(kv_cache, (tuple, list)):
-            for item in kv_cache:
-                self._deep_clean_kv_cache(item)
+            for i, item in enumerate(kv_cache):
+                tensor_count += self._deep_clean_kv_cache(item)
+                if isinstance(item, torch.Tensor):
+                    try:
+                        del item
+                    except:
+                        pass
+        elif isinstance(kv_cache, dict):
+            for key, value in list(kv_cache.items()):
+                tensor_count += self._deep_clean_kv_cache(value)
+                if isinstance(value, torch.Tensor):
+                    try:
+                        del kv_cache[key]
+                    except:
+                        pass
+        
+        return tensor_count
     
     def __repr__(self) -> str:
         """String representation of the graph."""

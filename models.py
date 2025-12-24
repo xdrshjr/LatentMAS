@@ -574,6 +574,15 @@ class ModelWrapper:
                 
                 # Clean up temporary tensors from this latent step
                 del latent_embed, latent_mask, outputs
+                
+                # Force GPU synchronization every few steps to prevent accumulation
+                if (step + 1) % 2 == 0 and torch.cuda.is_available():
+                    torch.cuda.synchronize()
+            
+            # Log path completion with statistics and memory usage BEFORE cleanup
+            hidden_norm = last_hidden.norm(dim=-1).mean().item()
+            latent_memory_mb = sum(t.element_size() * t.nelement() for t in latent_history) / 1024**2
+            hidden_memory_mb = (last_hidden.element_size() * last_hidden.nelement()) / 1024**2
             
             # Store path information, 思考5步后，latent_history存储了所有latent的vector: [[1, 1024], [1, 1024], [1, 1024], [1, 1024], [1, 1024]]
             path_info = {
@@ -589,25 +598,22 @@ class ModelWrapper:
             }
             paths.append(path_info)
             
-            # Log path completion with statistics and memory usage
-            hidden_norm = last_hidden.norm(dim=-1).mean().item()
-            latent_memory_mb = sum(t.element_size() * t.nelement() for t in latent_history) / 1024**2
-            hidden_memory_mb = (last_hidden.element_size() * last_hidden.nelement()) / 1024**2
             logger.info(f"[Path Generation] Completed path {path_idx + 1}/{num_paths} - final hidden norm: {hidden_norm:.4f}, "
                        f"latent_history: {latent_memory_mb:.2f}MB, hidden_states: {hidden_memory_mb:.2f}MB")
             logger.debug(f"[Path Generation] Path {path_idx + 1} metadata: {path_info['metadata']}")
             
-            # Clean up intermediate tensors MORE FREQUENTLY to prevent accumulation
-            # Changed from every 5 paths to every 3 paths for better memory management
-            if (path_idx + 1) % 3 == 0 and torch.cuda.is_available():
+            # Clean up intermediate hidden states to prevent accumulation
+            del last_hidden
+            
+            # Clean up intermediate tensors AGGRESSIVELY after EVERY path to prevent accumulation
+            # Critical: Clean immediately after each path to prevent memory buildup across 20 paths
+            if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()  # Ensure cleanup completes
                 gpu_mem_allocated = torch.cuda.memory_allocated() / 1024**3
-                logger.debug(f"[GPU Memory] After path {path_idx + 1} (with cache cleanup): allocated={gpu_mem_allocated:.2f}GB")
-            elif torch.cuda.is_available():
-                # Log GPU memory after each path
-                gpu_mem_allocated = torch.cuda.memory_allocated() / 1024**3
-                logger.debug(f"[GPU Memory] After path {path_idx + 1}: allocated={gpu_mem_allocated:.2f}GB")
+                if (path_idx + 1) % 5 == 0:
+                    # Log every 5 paths to avoid excessive logging
+                    logger.debug(f"[GPU Memory] After path {path_idx + 1} (with immediate cleanup): allocated={gpu_mem_allocated:.2f}GB")
         
         logger.info(f"[ModelWrapper.generate_diverse_latent_paths] Generated {len(paths)} diverse paths")
         
@@ -778,6 +784,15 @@ class ModelWrapper:
                 
                 # Clean up temporary tensors from this latent step (branching)
                 del latent_embed, latent_mask, outputs
+                
+                # Force GPU synchronization every few steps to prevent accumulation
+                if (step + 1) % 2 == 0 and torch.cuda.is_available():
+                    torch.cuda.synchronize()
+            
+            # Log branch completion with memory usage BEFORE cleanup
+            hidden_norm = last_hidden.norm(dim=-1).mean().item()
+            latent_memory_mb = sum(t.element_size() * t.nelement() for t in latent_history) / 1024**2
+            hidden_memory_mb = (last_hidden.element_size() * last_hidden.nelement()) / 1024**2
             
             # Store branch information
             branch_info = {
@@ -794,25 +809,22 @@ class ModelWrapper:
             }
             branches.append(branch_info)
             
-            # Log branch completion with memory usage
-            hidden_norm = last_hidden.norm(dim=-1).mean().item()
-            latent_memory_mb = sum(t.element_size() * t.nelement() for t in latent_history) / 1024**2
-            hidden_memory_mb = (last_hidden.element_size() * last_hidden.nelement()) / 1024**2
             logger.info(f"[Branching] Completed branch {branch_idx + 1}/{num_branches} - final hidden norm: {hidden_norm:.4f}, "
                        f"latent_history: {latent_memory_mb:.2f}MB, hidden_states: {hidden_memory_mb:.2f}MB")
             logger.debug(f"[Branching] Branch {branch_idx + 1} metadata: {branch_info['metadata']}")
             
-            # Clean up intermediate tensors MORE FREQUENTLY to prevent accumulation
-            # Changed from every 5 branches to every 3 branches for better memory management
-            if (branch_idx + 1) % 3 == 0 and torch.cuda.is_available():
+            # Clean up intermediate hidden states and branch_hidden to prevent accumulation
+            del last_hidden, branch_hidden
+            
+            # Clean up intermediate tensors AGGRESSIVELY after EVERY branch to prevent accumulation
+            # Critical: Clean immediately after each branch to prevent memory buildup
+            if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()  # Ensure cleanup completes
                 gpu_mem_allocated = torch.cuda.memory_allocated() / 1024**3
-                logger.debug(f"[GPU Memory] After branch {branch_idx + 1} (with cache cleanup): allocated={gpu_mem_allocated:.2f}GB")
-            elif torch.cuda.is_available():
-                # Log GPU memory after each branch
-                gpu_mem_allocated = torch.cuda.memory_allocated() / 1024**3
-                logger.debug(f"[GPU Memory] After branch {branch_idx + 1}: allocated={gpu_mem_allocated:.2f}GB")
+                if (branch_idx + 1) % 5 == 0:
+                    # Log every 5 branches to avoid excessive logging
+                    logger.debug(f"[GPU Memory] After branch {branch_idx + 1} (with immediate cleanup): allocated={gpu_mem_allocated:.2f}GB")
         
         logger.info(f"[ModelWrapper.generate_latent_with_branching] Created {len(branches)} branches")
         

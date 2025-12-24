@@ -20,7 +20,7 @@ export HF_HOME=/mnt/mydisk/models
 #  --task gsm8k \
 #  --prompt sequential \
 #  --temperature 0.5 \
-#  --max_samples 20 \
+#  --max_samples 50 \
 #  --disable_visualization \
 #  --generate_bs 1 \
 #  --max_new_tokens 2048

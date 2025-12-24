@@ -553,9 +553,16 @@ class PathManager:
             
             # Delete KV cache with recursive cleanup
             if path.kv_cache is not None:
-                tensor_count += 1
-                self._deep_clean_kv_cache(path.kv_cache)
+                kv_tensors = self._deep_clean_kv_cache(path.kv_cache)
+                tensor_count += kv_tensors
                 path.kv_cache = None
+            
+            # Clean metadata to remove any tensor references
+            if path.metadata:
+                for key in list(path.metadata.keys()):
+                    if isinstance(path.metadata[key], torch.Tensor):
+                        del path.metadata[key]
+                        tensor_count += 1
         
         # Clear dictionaries
         self.paths.clear()
@@ -586,6 +593,8 @@ class PathManager:
                 
                 # Explicitly delete tensors to free GPU memory
                 # Count tensors for logging
+                
+                # Clean latent history
                 if path.latent_history:
                     tensor_count += len(path.latent_history)
                     for tensor in path.latent_history:
@@ -593,16 +602,29 @@ class PathManager:
                             del tensor
                     path.latent_history.clear()
                 
+                # Clean hidden states
                 if path.hidden_states is not None:
                     tensor_count += 1
                     del path.hidden_states
                     path.hidden_states = None
                 
+                # Clean KV cache with recursive cleanup
                 if path.kv_cache is not None:
-                    tensor_count += 1
                     # KV cache contains nested structures - recursively clean
-                    self._deep_clean_kv_cache(path.kv_cache)
+                    kv_tensors = self._deep_clean_kv_cache(path.kv_cache)
+                    tensor_count += kv_tensors
                     path.kv_cache = None
+                
+                # Clean metadata to remove any tensor references
+                if path.metadata:
+                    metadata_tensors_removed = 0
+                    for key in list(path.metadata.keys()):
+                        if isinstance(path.metadata[key], torch.Tensor):
+                            del path.metadata[key]
+                            metadata_tensors_removed += 1
+                            tensor_count += 1
+                    if metadata_tensors_removed > 0:
+                        logger.debug(f"[PathManager.clear_paths] Removed {metadata_tensors_removed} tensor references from path {path_id} metadata")
                 
                 # Remove from dictionaries
                 del self.paths[path_id]
@@ -613,12 +635,18 @@ class PathManager:
         
         if cleared_count > 0:
             logger.info(f"[PathManager] Cleared {cleared_count}/{len(path_ids)} paths, freed {tensor_count} tensor references")
+            
+            # Force GPU cache cleanup and synchronization after clearing paths
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                logger.debug(f"[PathManager] Forced GPU cleanup after clearing {cleared_count} paths")
         else:
             logger.debug(f"[PathManager] No paths cleared from {len(path_ids)} provided IDs")
         
         return cleared_count
     
-    def _deep_clean_kv_cache(self, kv_cache: Any) -> None:
+    def _deep_clean_kv_cache(self, kv_cache: Any) -> int:
         """Recursively clean KV cache structure.
         
         KV cache is a nested structure (typically tuple of tuples) containing tensors.
@@ -626,16 +654,40 @@ class PathManager:
         
         Args:
             kv_cache: KV cache structure to clean
+            
+        Returns:
+            Number of tensors cleaned
         """
         if kv_cache is None:
-            return
+            return 0
+        
+        tensor_count = 0
         
         if isinstance(kv_cache, torch.Tensor):
+            # Delete the tensor reference
             del kv_cache
+            return 1
         elif isinstance(kv_cache, (tuple, list)):
-            for item in kv_cache:
-                self._deep_clean_kv_cache(item)
-        # Handle any other nested structures if needed
+            # Recursively clean all items in the structure
+            for i, item in enumerate(kv_cache):
+                tensor_count += self._deep_clean_kv_cache(item)
+                # Try to delete the item reference if it's a tensor
+                if isinstance(item, torch.Tensor):
+                    try:
+                        del item
+                    except:
+                        pass
+        elif isinstance(kv_cache, dict):
+            # Handle dictionary structures (some models use dict for KV cache)
+            for key, value in list(kv_cache.items()):
+                tensor_count += self._deep_clean_kv_cache(value)
+                if isinstance(value, torch.Tensor):
+                    try:
+                        del kv_cache[key]
+                    except:
+                        pass
+        
+        return tensor_count
     
     def __len__(self) -> int:
         """Return the number of active paths."""
