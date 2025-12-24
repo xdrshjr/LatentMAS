@@ -288,9 +288,9 @@ def main_direct(data_path: Optional[str] = None):
         # Generation parameters
         "max_new_tokens": 2048,  # Maximum tokens to generate
         "latent_steps": 5,  # Number of latent steps (for latent_mas and latent_mas_multipath)
-        "temperature": 0.6,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
+        "temperature": 0.5,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
         "top_p": 0.95,  # Top-p sampling parameter
-        "generate_bs": 20,  # Batch size for generation
+        "generate_bs": 1,  # Batch size for generation
         
         # Method-specific parameters
         "text_mas_context_length": -1,  # Context length limit for text_mas
