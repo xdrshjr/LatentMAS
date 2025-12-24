@@ -255,6 +255,9 @@ class TopKPruning(PruningStrategy):
                 f"pruned: [..., {stats.max_score_pruned:.4f}]"
             )
         
+        # Clean up temporary data structures
+        del sorted_paths
+        
         return pruned_paths
 
 
@@ -341,6 +344,10 @@ class ThresholdPruning(PruningStrategy):
             f"threshold={score_threshold:.4f}, "
             f"avg_score: {stats.avg_score_before:.4f} -> {stats.avg_score_after:.4f}"
         )
+        
+        # Clean up temporary data structures if sorted_paths was created
+        if 'sorted_paths' in locals():
+            del sorted_paths
         
         return pruned_paths
 
@@ -453,6 +460,9 @@ class AdaptivePruning(PruningStrategy):
             f"Pruned {stats.num_pruned} paths ({stats.num_input_paths} -> {stats.num_output_paths}), "
             f"keep_ratio={keep_ratio:.3f}, avg_score: {stats.avg_score_before:.4f} -> {stats.avg_score_after:.4f}"
         )
+        
+        # Clean up temporary data structures
+        del sorted_paths
         
         return pruned_paths
 
@@ -607,6 +617,14 @@ class DiversityAwarePruning(PruningStrategy):
             f"avg_score: {stats.avg_score_before:.4f} -> {stats.avg_score_after:.4f}"
         )
         
+        # Clean up temporary data structures
+        del sorted_paths, remaining_paths
+        
+        # Clean up any GPU tensors created during diversity calculations
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.debug(f"[DiversityAwarePruning] GPU cache cleaned after diversity-aware pruning")
+        
         return selected_paths
     
     def _compute_min_diversity(
@@ -651,6 +669,9 @@ class DiversityAwarePruning(PruningStrategy):
                 f"[DiversityAwarePruning] Diversity between path {candidate.path_id} "
                 f"and {selected.path_id}: {diversity:.4f}"
             )
+        
+        # Note: We don't delete tensors here as they're references from PathState objects
+        # They will be cleaned up when paths are removed from PathManager
         
         return max(0.0, min_diversity)
     
@@ -715,7 +736,12 @@ class DiversityAwarePruning(PruningStrategy):
             dim=1
         )
         
-        return float(similarity.item())
+        result = float(similarity.item())
+        
+        # Clean up temporary tensors
+        del vec1, vec2, similarity
+        
+        return result
 
 
 class BudgetBasedPruning(PruningStrategy):
@@ -877,6 +903,9 @@ class BudgetBasedPruning(PruningStrategy):
             f"budget={self.current_budget_used:.0f}/{self.max_budget:.0f} "
             f"({self.current_budget_used/self.max_budget:.1%})"
         )
+        
+        # Clean up temporary data structures
+        del path_costs
         
         return selected_paths
     

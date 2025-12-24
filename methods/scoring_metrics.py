@@ -336,6 +336,10 @@ class PerplexityScorer(BaseScorer):
             logger.info(f"[PerplexityScorer] Path {path_state.path_id}: "
                        f"perplexity={perplexity:.4f}, score={score:.4f}")
             
+            # Clean up any temporary tensors created during scoring
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
             return score
         
         except Exception as e:
@@ -767,6 +771,11 @@ class HiddenStateQualityScorer(BaseScorer):
         
         final_score = sum(scores) / len(scores)
         logger.debug(f"[HiddenStateQualityScorer] Final score for path {path_state.path_id}: {final_score:.4f}")
+        
+        # Clean up temporary tensors
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
         return final_score
     
     def _compute_norm_stability(self, latent_history: List[torch.Tensor]) -> float:
@@ -998,6 +1007,13 @@ class LatentConsistencyScorer(BaseScorer):
 
         consistency = float(max(0.0, min(1.0, consistency)))
         logger.info(f"[LatentConsistencyScorer] Final consistency score: {consistency:.4f} (metric: {self.similarity_metric})")
+        
+        # Clean up temporary tensors after group-level scoring
+        del latent_vectors
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.debug(f"[LatentConsistencyScorer] Cleaned up group-level scoring tensors")
+        
         return consistency
     
     def _extract_latent_representation(self, path_state: Any) -> Optional[torch.Tensor]:
@@ -1343,6 +1359,20 @@ class LatentConsistencyScorer(BaseScorer):
                     f"max: {max(individual_scores_valid):.4f}, "
                     f"mean: {np.mean(individual_scores_valid):.4f}, "
                     f"std: {np.std(individual_scores_valid):.4f}")
+
+        # Explicitly delete large temporary tensors to free GPU memory
+        logger.debug(f"[LatentConsistencyScorer] Cleaning up temporary tensors from scoring")
+        del X, similarity_matrix, similarity_matrix_masked, avg_similarities
+        
+        # Also clean up latent vectors list
+        del latent_vectors, diversity_scores
+        
+        # Force GPU memory cleanup and synchronization
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            gpu_mem_after = torch.cuda.memory_allocated() / 1024**3
+            logger.debug(f"[LatentConsistencyScorer] GPU memory after cleanup: {gpu_mem_after:.2f}GB")
 
         return individual_scores
 

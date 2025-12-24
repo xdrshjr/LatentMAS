@@ -153,6 +153,10 @@ class PathSimilarityDetector:
             ).item()
             
             logger.debug(f"[PathSimilarityDetector] Cosine similarity: {similarity:.4f}")
+            
+            # Clean up temporary tensors
+            del h1_flat, h2_flat
+            
             return similarity
             
         except Exception as e:
@@ -202,6 +206,13 @@ class PathSimilarityDetector:
             ).item()
             
             logger.debug(f"[PathSimilarityDetector] KL divergence: {kl_div:.4f}")
+            
+            # Clean up temporary tensors
+            if model_lm_head is None:
+                del h1_flat, h2_flat, p, q
+            else:
+                del logits1, logits2, p, q
+            
             return kl_div
             
         except Exception as e:
@@ -405,6 +416,15 @@ class PathSimilarityDetector:
         else:
             logger.debug(f"[PathSimilarityDetector] No similar path groups found "
                         f"(similarity threshold={self.cosine_threshold})")
+        
+        # Explicitly delete similarity matrix to free memory
+        del similarity_matrix, visited
+        logger.debug(f"[PathSimilarityDetector] Cleaned up similarity matrix and visited set")
+        
+        # Force GPU memory cleanup (in case GPU tensors were used in comparisons)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.debug(f"[PathSimilarityDetector] GPU cache cleaned after similarity detection")
         
         return merge_candidates
 
@@ -967,6 +987,12 @@ class PathMerger:
         
         if merge_groups == 0:
             logger.debug(f"[PathMerger] No paths were merged (no suitable candidates found or all skipped)")
+        
+        # Clean up temporary data structures
+        del merged_path_ids, merge_candidates
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.debug(f"[PathMerger] GPU cache cleaned after merge operation")
         
         return result_paths
     

@@ -549,6 +549,62 @@ class ReasoningGraph:
         """Return the number of nodes in the graph."""
         return len(self.nodes)
     
+    def clear(self) -> None:
+        """Clear all nodes and free GPU memory from tensors.
+        
+        This method recursively clears all nodes in the graph and explicitly
+        deletes tensors to free GPU memory.
+        """
+        num_nodes = len(self.nodes)
+        tensor_count = 0
+        
+        if num_nodes == 0:
+            logger.debug("[ReasoningGraph.clear] No nodes to clear")
+            return
+        
+        logger.info(f"[ReasoningGraph.clear] Clearing {num_nodes} nodes from graph")
+        
+        # Explicitly delete tensors from all nodes
+        for node_id, node in self.nodes.items():
+            # Delete hidden states
+            if node.hidden_states is not None:
+                tensor_count += 1
+                del node.hidden_states
+                node.hidden_states = None
+            
+            # Delete KV cache (recursively)
+            if node.kv_cache is not None:
+                tensor_count += 1
+                self._deep_clean_kv_cache(node.kv_cache)
+                node.kv_cache = None
+        
+        # Clear all data structures
+        self.nodes.clear()
+        self.edges.clear()
+        self.leaf_ids.clear()
+        self.root_id = None
+        
+        logger.info(f"[ReasoningGraph] Cleared {num_nodes} nodes and freed {tensor_count} tensor references")
+        logger.debug(f"[ReasoningGraph] Graph state after clear: nodes={len(self.nodes)}, edges={len(self.edges)}")
+    
+    def _deep_clean_kv_cache(self, kv_cache: Any) -> None:
+        """Recursively clean KV cache structure.
+        
+        KV cache is a nested structure of tuples/lists containing tensors.
+        This method recursively traverses and deletes all tensors.
+        
+        Args:
+            kv_cache: KV cache structure to clean
+        """
+        if kv_cache is None:
+            return
+        
+        if isinstance(kv_cache, torch.Tensor):
+            del kv_cache
+        elif isinstance(kv_cache, (tuple, list)):
+            for item in kv_cache:
+                self._deep_clean_kv_cache(item)
+    
     def __repr__(self) -> str:
         """String representation of the graph."""
         stats = self.get_statistics()

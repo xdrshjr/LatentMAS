@@ -87,6 +87,9 @@ class LatentMASMethod:
         past_kv: Optional[Tuple] = None
         agent_traces: List[List[Dict]] = [[] for _ in range(batch_size)]
         final_texts = ["" for _ in range(batch_size)]
+        
+        import logging
+        logger = logging.getLogger(__name__)
 
         for agent in self.agents:
             #
@@ -246,7 +249,29 @@ class LatentMASMethod:
                     "correct": ok,
                 }
             )
+        
+        # Clean up KV cache after batch processing to free GPU memory
+        if past_kv is not None:
+            logger.debug("[LatentMAS] Cleaning up batch KV cache")
+            self._deep_clean_kv_cache(past_kv)
+            past_kv = None
+            
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gpu_mem = torch.cuda.memory_allocated() / 1024**3
+                logger.debug(f"[LatentMAS] GPU memory after KV cache cleanup: {gpu_mem:.2f}GB")
+        
         return results
+    
+    def _deep_clean_kv_cache(self, kv_cache):
+        """Recursively clean KV cache structure."""
+        if kv_cache is None:
+            return
+        if isinstance(kv_cache, torch.Tensor):
+            del kv_cache
+        elif isinstance(kv_cache, (tuple, list)):
+            for item in kv_cache:
+                self._deep_clean_kv_cache(item)
     
     def run_batch_vllm(self, items: List[Dict]) -> List[Dict]:
         if len(items) > self.generate_bs:
@@ -435,6 +460,28 @@ class LatentMASMethod:
                     "correct": ok,
                 }
             )
+        
+        # Clean up resources after batch processing to free GPU memory
+        logger.debug("[LatentMAS][vLLM] Cleaning up batch resources")
+        
+        # Clean up KV cache
+        if past_kv is not None:
+            self._deep_clean_kv_cache(past_kv)
+            past_kv = None
+        
+        # Clean up embedding records
+        if embedding_record:
+            for emb in embedding_record:
+                if emb is not None:
+                    del emb
+            embedding_record.clear()
+            logger.debug("[LatentMAS][vLLM] Cleared embedding records")
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gpu_mem = torch.cuda.memory_allocated() / 1024**3
+            logger.debug(f"[LatentMAS][vLLM] GPU memory after cleanup: {gpu_mem:.2f}GB")
+        
         return results
 
     def run_item(self, item: Dict) -> Dict:

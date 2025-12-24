@@ -571,6 +571,9 @@ class ModelWrapper:
                 
                 past = outputs.past_key_values
                 last_hidden = outputs.hidden_states[-1][:, -1, :]
+                
+                # Clean up temporary tensors from this latent step
+                del latent_embed, latent_mask, outputs
             
             # Store path information, 思考5步后，latent_history存储了所有latent的vector: [[1, 1024], [1, 1024], [1, 1024], [1, 1024], [1, 1024]]
             path_info = {
@@ -586,12 +589,34 @@ class ModelWrapper:
             }
             paths.append(path_info)
             
-            # Log path completion with statistics
+            # Log path completion with statistics and memory usage
             hidden_norm = last_hidden.norm(dim=-1).mean().item()
-            logger.info(f"[Path Generation] Completed path {path_idx + 1}/{num_paths} - final hidden norm: {hidden_norm:.4f}")
+            latent_memory_mb = sum(t.element_size() * t.nelement() for t in latent_history) / 1024**2
+            hidden_memory_mb = (last_hidden.element_size() * last_hidden.nelement()) / 1024**2
+            logger.info(f"[Path Generation] Completed path {path_idx + 1}/{num_paths} - final hidden norm: {hidden_norm:.4f}, "
+                       f"latent_history: {latent_memory_mb:.2f}MB, hidden_states: {hidden_memory_mb:.2f}MB")
             logger.debug(f"[Path Generation] Path {path_idx + 1} metadata: {path_info['metadata']}")
+            
+            # Clean up intermediate tensors MORE FREQUENTLY to prevent accumulation
+            # Changed from every 5 paths to every 3 paths for better memory management
+            if (path_idx + 1) % 3 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()  # Ensure cleanup completes
+                gpu_mem_allocated = torch.cuda.memory_allocated() / 1024**3
+                logger.debug(f"[GPU Memory] After path {path_idx + 1} (with cache cleanup): allocated={gpu_mem_allocated:.2f}GB")
+            elif torch.cuda.is_available():
+                # Log GPU memory after each path
+                gpu_mem_allocated = torch.cuda.memory_allocated() / 1024**3
+                logger.debug(f"[GPU Memory] After path {path_idx + 1}: allocated={gpu_mem_allocated:.2f}GB")
         
         logger.info(f"[ModelWrapper.generate_diverse_latent_paths] Generated {len(paths)} diverse paths")
+        
+        # Final cleanup after generating all paths
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            logger.debug(f"[ModelWrapper.generate_diverse_latent_paths] Final GPU cleanup completed")
+        
         return paths
     
     @torch.no_grad()
@@ -750,6 +775,9 @@ class ModelWrapper:
                 
                 past = outputs.past_key_values
                 last_hidden = outputs.hidden_states[-1][:, -1, :]
+                
+                # Clean up temporary tensors from this latent step (branching)
+                del latent_embed, latent_mask, outputs
             
             # Store branch information
             branch_info = {
@@ -766,11 +794,33 @@ class ModelWrapper:
             }
             branches.append(branch_info)
             
-            # Log branch completion
+            # Log branch completion with memory usage
             hidden_norm = last_hidden.norm(dim=-1).mean().item()
-            logger.info(f"[Branching] Completed branch {branch_idx + 1}/{num_branches} - final hidden norm: {hidden_norm:.4f}")
+            latent_memory_mb = sum(t.element_size() * t.nelement() for t in latent_history) / 1024**2
+            hidden_memory_mb = (last_hidden.element_size() * last_hidden.nelement()) / 1024**2
+            logger.info(f"[Branching] Completed branch {branch_idx + 1}/{num_branches} - final hidden norm: {hidden_norm:.4f}, "
+                       f"latent_history: {latent_memory_mb:.2f}MB, hidden_states: {hidden_memory_mb:.2f}MB")
             logger.debug(f"[Branching] Branch {branch_idx + 1} metadata: {branch_info['metadata']}")
+            
+            # Clean up intermediate tensors MORE FREQUENTLY to prevent accumulation
+            # Changed from every 5 branches to every 3 branches for better memory management
+            if (branch_idx + 1) % 3 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()  # Ensure cleanup completes
+                gpu_mem_allocated = torch.cuda.memory_allocated() / 1024**3
+                logger.debug(f"[GPU Memory] After branch {branch_idx + 1} (with cache cleanup): allocated={gpu_mem_allocated:.2f}GB")
+            elif torch.cuda.is_available():
+                # Log GPU memory after each branch
+                gpu_mem_allocated = torch.cuda.memory_allocated() / 1024**3
+                logger.debug(f"[GPU Memory] After branch {branch_idx + 1}: allocated={gpu_mem_allocated:.2f}GB")
         
         logger.info(f"[ModelWrapper.generate_latent_with_branching] Created {len(branches)} branches")
+        
+        # Final cleanup after generating all branches
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            logger.debug(f"[ModelWrapper.generate_latent_with_branching] Final GPU cleanup completed")
+        
         return branches
 
