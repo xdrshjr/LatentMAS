@@ -594,6 +594,14 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     logger.info(f"[{agent.name}] All path scores before pruning (by path_id): "
                               f"{[f'({pid}:{score:.4f})' for pid, score in all_scores]}")
                     
+                    # Detect if current agent is Refiner (倒数第二个 agent)
+                    is_refiner = (agent_idx == len(self.agents) - 2)
+                    is_judger = (agent.role == "judger")
+                    
+                    if is_refiner:
+                        logger.info(f"[{agent.name}] Detected Refiner stage (agent {agent_idx + 1}/{len(self.agents)})")
+                        logger.info(f"[{agent.name}] Will force pruning to keep ONLY 1 path for final Judger")
+                    
                     # Prune low-quality paths
                     if torch.cuda.is_available():
                         gpu_mem_before_prune = torch.cuda.memory_allocated() / 1024**3
@@ -601,20 +609,63 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     
                     logger.info(f"[{agent.name}] Pruning low-quality paths using {self.pruning_strategy.__class__.__name__}")
                     logger.debug(f"[{agent.name}] Pre-pruning path scores: {[f'{p.path_id}:{p.score:.4f}' for p in new_paths]}")
-                    pruned_paths = self.pruning_strategy.prune(
-                        paths=new_paths,
-                        current_step=agent_idx,
-                        total_steps=len(self.agents),
-                    )
+                    
+                    # For Refiner, force keep_count=1 to ensure only 1 path for Judger
+                    if is_refiner:
+                        logger.info(f"[{agent.name}] Forcing pruning to keep exactly 1 path (Refiner strategy)")
+                        pruned_paths = self.pruning_strategy.prune(
+                            paths=new_paths,
+                            current_step=agent_idx,
+                            total_steps=len(self.agents),
+                            force_keep_count=1,  # Force Refiner to keep only 1 path
+                        )
+                    else:
+                        pruned_paths = self.pruning_strategy.prune(
+                            paths=new_paths,
+                            current_step=agent_idx,
+                            total_steps=len(self.agents),
+                        )
+                    
                     logger.info(f"[{agent.name}] Pruning complete: kept {len(pruned_paths)}/{len(new_paths)} paths")
                     kept_paths_info = [(p.path_id, p.score) for p in pruned_paths]
                     logger.info(f"[{agent.name}] Kept paths (sorted by score desc): "
                               f"{[f'Path{pid}={score:.4f}' for pid, score in kept_paths_info]}")
                     
                     # Merge similar paths if enabled
-                    if self.enable_merging and len(pruned_paths) > 1:
+                    # Agent role-aware merge timing strategy:
+                    # - Planner: Skip merge to preserve diversity for exploration
+                    # - Critic: Allow merge to reduce redundancy after evaluation
+                    # - Refiner: Skip merge (already pruned to 1 path)
+                    # - Judger: No merge needed (final stage)
+                    
+                    is_planner = (agent.role == "planner")
+                    is_critic = (agent.role == "critic")
+                    
+                    # Determine if we should attempt merging for this agent
+                    should_attempt_merge = (
+                        self.enable_merging and 
+                        len(pruned_paths) > 1 and 
+                        not is_refiner and 
+                        not is_planner and  # Skip Planner to preserve diversity
+                        is_critic  # Only merge at Critic stage
+                    )
+                    
+                    if should_attempt_merge:
                         logger.info(f"[{agent.name}] Attempting to merge similar paths (threshold: {self.merge_threshold})")
+                        logger.info(f"[{agent.name}] Agent role '{agent.role}' allows merging at this stage")
                         logger.debug(f"[{agent.name}] Pre-merge path count: {len(pruned_paths)}")
+                        
+                        # Log pre-merge path details
+                        pre_merge_info = [(p.path_id, p.score, p.metadata.get('latent_consistency', None)) 
+                                         for p in pruned_paths]
+                        pre_merge_strs = []
+                        for pid, score, cons in pre_merge_info:
+                            if cons is not None:
+                                pre_merge_strs.append(f"Path{pid}(score={score:.4f}, cons={cons:.4f})")
+                            else:
+                                pre_merge_strs.append(f"Path{pid}(score={score:.4f}, cons=N/A)")
+                        logger.info(f"[{agent.name}] Pre-merge paths: " + ", ".join(pre_merge_strs))
+                        
                         merged_paths = self.path_merger.merge_similar_paths(
                             paths=pruned_paths,
                             path_manager=self.path_manager,
@@ -623,8 +674,24 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             min_group_size=2
                         )
                         logger.info(f"[{agent.name}] Merging complete: reduced to {len(merged_paths)} paths")
+                        
                         if len(merged_paths) < len(pruned_paths):
-                            logger.info(f"[{agent.name}] Successfully merged {len(pruned_paths) - len(merged_paths)} similar paths")
+                            num_merged = len(pruned_paths) - len(merged_paths)
+                            logger.info(f"[{agent.name}] Successfully merged {num_merged} similar paths")
+                            
+                            # Log post-merge path details
+                            post_merge_info = [(p.path_id, p.score, p.metadata.get('latent_consistency', None)) 
+                                             for p in merged_paths]
+                            post_merge_strs = []
+                            for pid, score, cons in post_merge_info:
+                                if cons is not None:
+                                    post_merge_strs.append(f"Path{pid}(score={score:.4f}, cons={cons:.4f})")
+                                else:
+                                    post_merge_strs.append(f"Path{pid}(score={score:.4f}, cons=N/A)")
+                            logger.info(f"[{agent.name}] Post-merge paths: " + ", ".join(post_merge_strs))
+                        else:
+                            logger.info(f"[{agent.name}] No paths were merged (no suitable merge candidates found)")
+                        
                         batch_paths[batch_idx] = merged_paths
                         
                         # Immediate GPU cleanup after merging (merging creates similarity matrices)
@@ -632,10 +699,18 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             torch.cuda.empty_cache()
                             logger.debug(f"[{agent.name}] GPU cache cleaned after merge operation")
                     else:
-                        if not self.enable_merging:
-                            logger.debug(f"[{agent.name}] Path merging disabled")
+                        # Log reason for skipping merge
+                        if is_refiner:
+                            logger.info(f"[{agent.name}] Skipping merge for Refiner (already has {len(pruned_paths)} path)")
+                        elif is_planner:
+                            logger.info(f"[{agent.name}] Skipping merge for Planner (preserving diversity for exploration)")
+                        elif not is_critic:
+                            logger.info(f"[{agent.name}] Skipping merge for agent role '{agent.role}' (merge only at Critic stage)")
+                        elif not self.enable_merging:
+                            logger.debug(f"[{agent.name}] Path merging disabled globally")
                         else:
                             logger.debug(f"[{agent.name}] Only {len(pruned_paths)} path(s), skipping merge")
+                        
                         batch_paths[batch_idx] = pruned_paths
                     
                     # Record agent trace
@@ -1241,18 +1316,58 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         torch.cuda.empty_cache()
                         logger.debug(f"[vLLM] GPU cache cleaned after scoring")
                     
+                    # Detect if current agent is Refiner (倒数第二个 agent)
+                    is_refiner = (agent_idx == len(self.agents) - 2)
+                    
+                    if is_refiner:
+                        logger.info(f"[{agent.name}][vLLM] Detected Refiner stage (agent {agent_idx + 1}/{len(self.agents)})")
+                        logger.info(f"[{agent.name}][vLLM] Will force pruning to keep ONLY 1 path for final Judger")
+                    
                     # Prune low-quality paths
                     logger.debug(f"Pruning paths [vLLM]")
-                    pruned_paths = self.pruning_strategy.prune(
-                        paths=batch_paths[batch_idx],
-                        step=agent_idx,
-                        total_steps=len(self.agents),
-                    )
+                    
+                    # For Refiner, force keep_count=1
+                    if is_refiner:
+                        logger.info(f"[{agent.name}][vLLM] Forcing pruning to keep exactly 1 path (Refiner strategy)")
+                        pruned_paths = self.pruning_strategy.prune(
+                            paths=batch_paths[batch_idx],
+                            current_step=agent_idx,
+                            total_steps=len(self.agents),
+                            force_keep_count=1,
+                        )
+                    else:
+                        pruned_paths = self.pruning_strategy.prune(
+                            paths=batch_paths[batch_idx],
+                            current_step=agent_idx,
+                            total_steps=len(self.agents),
+                        )
+                    
                     logger.info(f"Pruning: kept {len(pruned_paths)}/{len(batch_paths[batch_idx])} paths [vLLM]")
                     
                     # Merge similar paths if enabled
-                    if self.enable_merging and len(pruned_paths) > 1:
-                        logger.debug(f"Merging similar paths [vLLM]")
+                    # Agent role-aware merge timing strategy (vLLM version):
+                    # - Planner: Skip merge to preserve diversity for exploration
+                    # - Critic: Allow merge to reduce redundancy after evaluation
+                    # - Refiner: Skip merge (already pruned to 1 path)
+                    # - Judger: No merge needed (final stage)
+                    
+                    is_planner = (agent.role == "planner")
+                    is_critic = (agent.role == "critic")
+                    
+                    # Determine if we should attempt merging for this agent
+                    should_attempt_merge = (
+                        self.enable_merging and 
+                        len(pruned_paths) > 1 and 
+                        not is_refiner and 
+                        not is_planner and  # Skip Planner to preserve diversity
+                        is_critic  # Only merge at Critic stage
+                    )
+                    
+                    if should_attempt_merge:
+                        logger.info(f"[{agent.name}][vLLM] Attempting to merge similar paths (threshold: {self.merge_threshold})")
+                        logger.info(f"[{agent.name}][vLLM] Agent role '{agent.role}' allows merging at this stage")
+                        logger.debug(f"[{agent.name}][vLLM] Pre-merge path count: {len(pruned_paths)}")
+                        
                         merged_paths = self.path_merger.merge_similar_paths(
                             paths=pruned_paths,
                             path_manager=self.path_manager,
@@ -1260,7 +1375,14 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             use_kl=False,
                             min_group_size=2
                         )
-                        logger.info(f"Merging: reduced to {len(merged_paths)} paths [vLLM]")
+                        logger.info(f"[{agent.name}][vLLM] Merging complete: reduced to {len(merged_paths)} paths")
+                        
+                        if len(merged_paths) < len(pruned_paths):
+                            num_merged = len(pruned_paths) - len(merged_paths)
+                            logger.info(f"[{agent.name}][vLLM] Successfully merged {num_merged} similar paths")
+                        else:
+                            logger.info(f"[{agent.name}][vLLM] No paths were merged (no suitable merge candidates found)")
+                        
                         batch_paths[batch_idx] = merged_paths
                         
                         # Immediate GPU cleanup after merging (vLLM)
@@ -1268,6 +1390,18 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             torch.cuda.empty_cache()
                             logger.debug(f"[vLLM] GPU cache cleaned after merge operation")
                     else:
+                        # Log reason for skipping merge
+                        if is_refiner:
+                            logger.info(f"[{agent.name}][vLLM] Skipping merge for Refiner (already has {len(pruned_paths)} path)")
+                        elif is_planner:
+                            logger.info(f"[{agent.name}][vLLM] Skipping merge for Planner (preserving diversity for exploration)")
+                        elif not is_critic:
+                            logger.info(f"[{agent.name}][vLLM] Skipping merge for agent role '{agent.role}' (merge only at Critic stage)")
+                        elif not self.enable_merging:
+                            logger.debug(f"[{agent.name}][vLLM] Path merging disabled globally")
+                        else:
+                            logger.debug(f"[{agent.name}][vLLM] Only {len(pruned_paths)} path(s), skipping merge")
+                        
                         batch_paths[batch_idx] = pruned_paths
                     
                     # Record agent trace

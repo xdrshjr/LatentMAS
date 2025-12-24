@@ -362,13 +362,17 @@ class AdaptivePruning(PruningStrategy):
         min_keep_ratio: Minimum ratio of paths to keep (early steps)
         max_keep_ratio: Maximum ratio of paths to keep (later steps)
         min_paths: Minimum absolute number of paths to keep
+        consistency_threshold: Threshold below which paths are considered low-consistency
+        prioritize_consistency: Whether to prioritize high-consistency paths
     """
     
     def __init__(
         self,
         min_keep_ratio: float = 0.3,
         max_keep_ratio: float = 0.8,
-        min_paths: int = 2
+        min_paths: int = 2,
+        consistency_threshold: float = 0.3,
+        prioritize_consistency: bool = True
     ):
         """Initialize the adaptive pruning strategy.
         
@@ -376,15 +380,21 @@ class AdaptivePruning(PruningStrategy):
             min_keep_ratio: Minimum ratio of paths to keep (early)
             max_keep_ratio: Maximum ratio of paths to keep (later)
             min_paths: Minimum absolute number of paths to keep
+            consistency_threshold: Minimum consistency score to avoid immediate pruning
+            prioritize_consistency: Whether to filter low-consistency paths first
         """
         super().__init__()
         self.min_keep_ratio = min_keep_ratio
         self.max_keep_ratio = max_keep_ratio
         self.min_paths = min_paths
+        self.consistency_threshold = consistency_threshold
+        self.prioritize_consistency = prioritize_consistency
         logger.info(
             f"[AdaptivePruning] Initialized with "
             f"keep_ratio=[{min_keep_ratio:.2f}, {max_keep_ratio:.2f}], "
-            f"min_paths={min_paths}"
+            f"min_paths={min_paths}, "
+            f"consistency_threshold={consistency_threshold:.2f}, "
+            f"prioritize_consistency={prioritize_consistency}"
         )
     
     def prune(
@@ -393,15 +403,20 @@ class AdaptivePruning(PruningStrategy):
         current_step: int,
         total_steps: int,
         path_diversity: Optional[float] = None,
+        force_keep_count: Optional[int] = None,
         **kwargs
     ) -> List[Any]:
         """Prune paths with adaptive rate based on progress.
+        
+        Implements consistency-aware pruning: filters out low-consistency paths first,
+        then sorts by final score among high-consistency paths.
         
         Args:
             paths: List of PathState objects to prune
             current_step: Current step in the reasoning process
             total_steps: Total number of steps
             path_diversity: Optional diversity metric (0-1, higher = more diverse)
+            force_keep_count: Force keeping exactly this many paths (overrides adaptive calculation)
             **kwargs: Additional parameters
             
         Returns:
@@ -411,54 +426,131 @@ class AdaptivePruning(PruningStrategy):
             logger.warning("[AdaptivePruning] No paths to prune, returning empty list")
             return []
         
-        # Calculate adaptive keep ratio based on progress
-        # Formula: keep_ratio = min_ratio + (max_ratio - min_ratio) * (step / total_steps)
-        progress = current_step / max(total_steps, 1)
-        keep_ratio = self.min_keep_ratio + (self.max_keep_ratio - self.min_keep_ratio) * progress
-        
-        # Adjust based on path diversity if provided
-        if path_diversity is not None:
-            # If diversity is low, prune more aggressively to force exploration
-            # If diversity is high, keep more paths
-            diversity_adjustment = (path_diversity - 0.5) * 0.2  # ±0.1 adjustment
-            keep_ratio = np.clip(keep_ratio + diversity_adjustment, self.min_keep_ratio, self.max_keep_ratio)
+        # Check if force_keep_count is specified (e.g., for Refiner stage)
+        if force_keep_count is not None:
+            keep_count = max(1, min(force_keep_count, len(paths)))
+            logger.info(f"[AdaptivePruning] Using forced keep_count={keep_count} (overriding adaptive calculation)")
+        else:
+            # Calculate adaptive keep ratio based on progress
+            # Formula: keep_ratio = min_ratio + (max_ratio - min_ratio) * (step / total_steps)
+            progress = current_step / max(total_steps, 1)
+            keep_ratio = self.min_keep_ratio + (self.max_keep_ratio - self.min_keep_ratio) * progress
+            
+            # Adjust based on path diversity if provided
+            if path_diversity is not None:
+                # If diversity is low, prune more aggressively to force exploration
+                # If diversity is high, keep more paths
+                diversity_adjustment = (path_diversity - 0.5) * 0.2  # ±0.1 adjustment
+                keep_ratio = np.clip(keep_ratio + diversity_adjustment, self.min_keep_ratio, self.max_keep_ratio)
+                logger.debug(
+                    f"[AdaptivePruning] Adjusted keep_ratio by {diversity_adjustment:.3f} "
+                    f"based on diversity={path_diversity:.3f}"
+                )
+            
+            # Calculate number of paths to keep
+            keep_count = max(self.min_paths, int(len(paths) * keep_ratio))
+            keep_count = min(keep_count, len(paths))
+            
             logger.debug(
-                f"[AdaptivePruning] Adjusted keep_ratio by {diversity_adjustment:.3f} "
-                f"based on diversity={path_diversity:.3f}"
+                f"[AdaptivePruning] Step {current_step}/{total_steps} (progress={progress:.2f}), "
+                f"keep_ratio={keep_ratio:.3f}, keeping {keep_count}/{len(paths)} paths"
             )
         
-        # Calculate number of paths to keep
-        keep_count = max(self.min_paths, int(len(paths) * keep_ratio))
-        keep_count = min(keep_count, len(paths))
-        
-        logger.debug(
-            f"[AdaptivePruning] Step {current_step}/{total_steps} (progress={progress:.2f}), "
-            f"keep_ratio={keep_ratio:.3f}, keeping {keep_count}/{len(paths)} paths"
-        )
-        
-        # Log individual path scores
+        # Log individual path scores and consistency
         for path in paths:
-            logger.debug(f"[AdaptivePruning] Path {path.path_id}: score={path.score:.4f}")
+            consistency = path.metadata.get('latent_consistency', None)
+            if consistency is not None:
+                logger.debug(f"[AdaptivePruning] Path {path.path_id}: score={path.score:.4f}, consistency={consistency:.4f}")
+            else:
+                logger.debug(f"[AdaptivePruning] Path {path.path_id}: score={path.score:.4f}")
         
-        # Sort and keep top paths
-        sorted_paths = sorted(paths, key=lambda p: p.score, reverse=True)
+        # CONSISTENCY-AWARE PRUNING LOGIC
+        # Step 1: Filter out low-consistency paths if prioritize_consistency is enabled
+        if self.prioritize_consistency:
+            # Separate paths into high and low consistency groups
+            high_consistency_paths = []
+            low_consistency_paths = []
+            
+            for path in paths:
+                consistency = path.metadata.get('latent_consistency', None)
+                if consistency is not None:
+                    if consistency >= self.consistency_threshold:
+                        high_consistency_paths.append(path)
+                        logger.debug(f"[AdaptivePruning] Path {path.path_id}: HIGH consistency={consistency:.4f}, score={path.score:.4f}")
+                    else:
+                        low_consistency_paths.append(path)
+                        logger.debug(f"[AdaptivePruning] Path {path.path_id}: LOW consistency={consistency:.4f}, score={path.score:.4f}")
+                else:
+                    # If no consistency score, treat as medium consistency
+                    high_consistency_paths.append(path)
+                    logger.debug(f"[AdaptivePruning] Path {path.path_id}: NO consistency score, treating as medium, score={path.score:.4f}")
+            
+            logger.info(f"[AdaptivePruning] Consistency filtering: {len(high_consistency_paths)} high-consistency "
+                       f"(>={self.consistency_threshold:.2f}), {len(low_consistency_paths)} low-consistency paths")
+            
+            # Log statistics for each group
+            if high_consistency_paths:
+                high_cons_scores = [p.metadata.get('latent_consistency', 0) for p in high_consistency_paths]
+                high_path_scores = [p.score for p in high_consistency_paths]
+                logger.info(f"[AdaptivePruning] High-consistency group: "
+                           f"consistency=[{min(high_cons_scores):.4f}, {max(high_cons_scores):.4f}], "
+                           f"scores=[{min(high_path_scores):.4f}, {max(high_path_scores):.4f}]")
+            
+            if low_consistency_paths:
+                low_cons_scores = [p.metadata.get('latent_consistency', 0) for p in low_consistency_paths]
+                low_path_scores = [p.score for p in low_consistency_paths]
+                logger.info(f"[AdaptivePruning] Low-consistency group: "
+                           f"consistency=[{min(low_cons_scores):.4f}, {max(low_cons_scores):.4f}], "
+                           f"scores=[{min(low_path_scores):.4f}, {max(low_path_scores):.4f}]")
+            
+            # Step 2: Prioritize high-consistency paths
+            # If we have enough high-consistency paths, only consider those
+            if len(high_consistency_paths) >= keep_count:
+                logger.info(f"[AdaptivePruning] Sufficient high-consistency paths ({len(high_consistency_paths)} >= {keep_count}), "
+                           f"pruning ALL {len(low_consistency_paths)} low-consistency paths")
+                if low_consistency_paths:
+                    pruned_ids = [p.path_id for p in low_consistency_paths]
+                    logger.info(f"[AdaptivePruning] Pruned low-consistency path IDs: {pruned_ids}")
+                candidate_paths = high_consistency_paths
+            else:
+                # Not enough high-consistency paths, need to include some low-consistency ones
+                logger.warning(f"[AdaptivePruning] Insufficient high-consistency paths ({len(high_consistency_paths)} < {keep_count}), "
+                              f"will include some low-consistency paths to meet keep_count requirement")
+                candidate_paths = paths
+        else:
+            # No consistency filtering
+            candidate_paths = paths
+            logger.debug("[AdaptivePruning] Consistency prioritization disabled, using all paths")
+        
+        # Step 3: Sort by final score and keep top-k
+        sorted_paths = sorted(candidate_paths, key=lambda p: p.score, reverse=True)
         pruned_paths = sorted_paths[:keep_count]
+        
+        # Log details of kept paths
+        logger.info(f"[AdaptivePruning] Kept paths:")
+        for path in pruned_paths:
+            consistency = path.metadata.get('latent_consistency', None)
+            if consistency is not None:
+                logger.info(f"  - Path {path.path_id}: score={path.score:.4f}, consistency={consistency:.4f}")
+            else:
+                logger.info(f"  - Path {path.path_id}: score={path.score:.4f}")
         
         # Compute and log statistics
         stats = self._compute_statistics(
             paths,
             pruned_paths,
-            strategy='adaptive',
+            strategy='adaptive_consistency_aware' if self.prioritize_consistency else 'adaptive',
             current_step=current_step,
             total_steps=total_steps,
-            progress=progress,
-            keep_ratio=keep_ratio,
-            path_diversity=path_diversity
+            progress=progress if force_keep_count is None else None,
+            keep_ratio=keep_ratio if force_keep_count is None else None,
+            path_diversity=path_diversity,
+            forced_count=force_keep_count
         )
         
-        logger.debug(
-            f"Pruned {stats.num_pruned} paths ({stats.num_input_paths} -> {stats.num_output_paths}), "
-            f"keep_ratio={keep_ratio:.3f}, avg_score: {stats.avg_score_before:.4f} -> {stats.avg_score_after:.4f}"
+        logger.info(
+            f"[AdaptivePruning] Pruned {stats.num_pruned} paths ({stats.num_input_paths} -> {stats.num_output_paths}), "
+            f"avg_score: {stats.avg_score_before:.4f} -> {stats.avg_score_after:.4f}"
         )
         
         # Clean up temporary data structures

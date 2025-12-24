@@ -787,13 +787,19 @@ class PathMerger:
         similarity_detector: PathSimilarityDetector instance
         merge_strategy: MergeStrategy instance
         auto_select_strategy: Whether to automatically select merge strategy
+        use_metadata_for_merge: Whether to use pre-computed consistency scores for merge decisions
+        metadata_consistency_threshold: Minimum consistency required for merging
+        metadata_score_diff_threshold: Maximum score difference allowed for merging
     """
     
     def __init__(
         self,
         similarity_detector: Optional[PathSimilarityDetector] = None,
         merge_strategy: Optional[MergeStrategy] = None,
-        auto_select_strategy: bool = True
+        auto_select_strategy: bool = True,
+        use_metadata_for_merge: bool = True,
+        metadata_consistency_threshold: float = 0.85,
+        metadata_score_diff_threshold: float = 0.05
     ):
         """Initialize the path merger.
         
@@ -801,13 +807,90 @@ class PathMerger:
             similarity_detector: Custom similarity detector (creates default if None)
             merge_strategy: Custom merge strategy (creates default if None)
             auto_select_strategy: Whether to auto-select strategy based on paths
+            use_metadata_for_merge: Whether to use pre-computed consistency from metadata
+            metadata_consistency_threshold: Min consistency for merge candidates
+            metadata_score_diff_threshold: Max score difference for merge candidates
         """
         self.similarity_detector = similarity_detector or PathSimilarityDetector()
         self.merge_strategy = merge_strategy or WeightedMergeStrategy()
         self.auto_select_strategy = auto_select_strategy
+        self.use_metadata_for_merge = use_metadata_for_merge
+        self.metadata_consistency_threshold = metadata_consistency_threshold
+        self.metadata_score_diff_threshold = metadata_score_diff_threshold
         self.statistics_history: List[MergeStatistics] = []
         
-        logger.info(f"[PathMerger] Initialized with auto_select={auto_select_strategy}")
+        logger.info(f"[PathMerger] Initialized with auto_select={auto_select_strategy}, "
+                   f"use_metadata={use_metadata_for_merge}, "
+                   f"consistency_threshold={metadata_consistency_threshold:.2f}, "
+                   f"score_diff_threshold={metadata_score_diff_threshold:.2f}")
+    
+    def should_merge_paths_by_metadata(
+        self,
+        path1: Any,
+        path2: Any
+    ) -> Tuple[bool, str]:
+        """Check if two paths should be merged based on pre-computed metadata.
+        
+        This method uses already-computed consistency scores to avoid re-computing
+        similarity, following the principle: "一致性高的路径是高质量路径".
+        
+        Args:
+            path1: First PathState object
+            path2: Second PathState object
+            
+        Returns:
+            Tuple of (should_merge, reason)
+        """
+        # Extract consistency scores from metadata
+        consistency1 = path1.metadata.get('latent_consistency', None)
+        consistency2 = path2.metadata.get('latent_consistency', None)
+        
+        # Check if both paths have consistency scores
+        if consistency1 is None or consistency2 is None:
+            logger.debug(f"[PathMerger] Cannot use metadata-based merge: missing consistency scores "
+                        f"(path {path1.path_id}: {consistency1}, path {path2.path_id}: {consistency2})")
+            return False, "missing_consistency_scores"
+        
+        # Check 1: Both paths must have high consistency
+        if consistency1 < self.metadata_consistency_threshold:
+            logger.debug(f"[PathMerger] ✗ Check 1 failed: Path {path1.path_id} has low consistency "
+                        f"({consistency1:.4f} < threshold {self.metadata_consistency_threshold:.2f})")
+            return False, f"path1_low_consistency_{consistency1:.4f}"
+        
+        if consistency2 < self.metadata_consistency_threshold:
+            logger.debug(f"[PathMerger] ✗ Check 1 failed: Path {path2.path_id} has low consistency "
+                        f"({consistency2:.4f} < threshold {self.metadata_consistency_threshold:.2f})")
+            return False, f"path2_low_consistency_{consistency2:.4f}"
+        
+        logger.debug(f"[PathMerger] ✓ Check 1 passed: Both paths have high consistency "
+                    f"(path {path1.path_id}: {consistency1:.4f}, path {path2.path_id}: {consistency2:.4f})")
+        
+        # Check 2: Scores must be close
+        score_diff = abs(path1.score - path2.score)
+        if score_diff > self.metadata_score_diff_threshold:
+            logger.debug(f"[PathMerger] ✗ Check 2 failed: Paths {path1.path_id} and {path2.path_id} have large score difference "
+                        f"({score_diff:.4f} > threshold {self.metadata_score_diff_threshold:.2f})")
+            return False, f"score_diff_too_large_{score_diff:.4f}"
+        
+        logger.debug(f"[PathMerger] ✓ Check 2 passed: Scores are close "
+                    f"(path {path1.path_id}: {path1.score:.4f}, path {path2.path_id}: {path2.score:.4f}, diff={score_diff:.4f})")
+        
+        # Check 3 (optional): Both should be reasonably high quality
+        min_quality_threshold = 0.5  # Paths with very low scores probably shouldn't merge
+        if path1.score < min_quality_threshold or path2.score < min_quality_threshold:
+            logger.debug(f"[PathMerger] ✗ Check 3 failed: At least one path has low quality score "
+                        f"(path {path1.path_id}: {path1.score:.4f}, path {path2.path_id}: {path2.score:.4f}, "
+                        f"threshold: {min_quality_threshold:.2f})")
+            return False, f"low_quality_scores_{path1.score:.4f}_{path2.score:.4f}"
+        
+        logger.debug(f"[PathMerger] ✓ Check 3 passed: Both paths have reasonable quality "
+                    f"(path {path1.path_id}: {path1.score:.4f}, path {path2.path_id}: {path2.score:.4f})")
+        
+        # All checks passed
+        logger.info(f"[PathMerger] ✓✓✓ All checks passed for paths {path1.path_id} and {path2.path_id}")
+        logger.info(f"[PathMerger]   Consistency: ({consistency1:.4f}, {consistency2:.4f})")
+        logger.info(f"[PathMerger]   Scores: ({path1.score:.4f}, {path2.score:.4f}), diff={score_diff:.4f}")
+        return True, "all_checks_passed"
     
     def select_merge_strategy(
         self,
@@ -863,6 +946,8 @@ class PathMerger:
     ) -> List[Any]:
         """Find and merge similar paths.
         
+        Uses metadata-based merge decisions when available to avoid re-computing similarity.
+        
         Args:
             paths: List of PathState objects
             path_manager: PathManager instance to handle merging
@@ -879,10 +964,70 @@ class PathMerger:
             logger.debug("[PathMerger] Not enough paths for merging")
             return paths
         
-        # Find merge candidates
-        merge_candidates = self.similarity_detector.find_merge_candidates(
-            paths, model_lm_head, use_kl, min_group_size
-        )
+        # STRATEGY: Use metadata-based merge decisions if enabled
+        if self.use_metadata_for_merge:
+            logger.info(f"[PathMerger] Using metadata-based merge decisions (avoiding re-computation)")
+            
+            # Find merge candidates using pre-computed consistency scores
+            merge_candidates = []
+            checked_pairs = set()
+            
+            for i, path1 in enumerate(paths):
+                for j, path2 in enumerate(paths[i+1:], start=i+1):
+                    # Avoid checking the same pair twice
+                    pair_key = (min(path1.path_id, path2.path_id), max(path1.path_id, path2.path_id))
+                    if pair_key in checked_pairs:
+                        continue
+                    checked_pairs.add(pair_key)
+                    
+                    # Check if should merge using metadata
+                    should_merge, reason = self.should_merge_paths_by_metadata(path1, path2)
+                    
+                    if should_merge:
+                        # Create a merge candidate for this pair
+                        consistency1 = path1.metadata.get('latent_consistency', 0.0)
+                        consistency2 = path2.metadata.get('latent_consistency', 0.0)
+                        avg_consistency = (consistency1 + consistency2) / 2.0
+                        score_diff = abs(path1.score - path2.score)
+                        
+                        candidate = MergeCandidate(
+                            path_ids=[path1.path_id, path2.path_id],
+                            similarity_scores={(path1.path_id, path2.path_id): avg_consistency},
+                            avg_similarity=avg_consistency,
+                            merge_priority=avg_consistency * 2,  # 2 paths
+                            metadata={
+                                'merge_method': 'metadata_based',
+                                'consistency1': consistency1,
+                                'consistency2': consistency2,
+                                'score1': path1.score,
+                                'score2': path2.score,
+                                'score_diff': score_diff,
+                                'reason': reason
+                            }
+                        )
+                        merge_candidates.append(candidate)
+                        logger.info(f"[PathMerger] ✓ Merge candidate approved: paths [{path1.path_id}, {path2.path_id}]")
+                        logger.info(f"[PathMerger]   - Consistency: [{consistency1:.4f}, {consistency2:.4f}] (avg={avg_consistency:.4f})")
+                        logger.info(f"[PathMerger]   - Scores: [{path1.score:.4f}, {path2.score:.4f}] (diff={score_diff:.4f})")
+                        logger.info(f"[PathMerger]   - Reason: {reason}")
+                    else:
+                        # Log why merge was rejected
+                        logger.debug(f"[PathMerger] ✗ Merge rejected: paths [{path1.path_id}, {path2.path_id}] - {reason}")
+            
+            logger.info(f"[PathMerger] Found {len(merge_candidates)} metadata-based merge candidates")
+            
+            # If no metadata-based candidates found, fall back to similarity detection
+            if not merge_candidates:
+                logger.info(f"[PathMerger] No metadata-based merge candidates, falling back to similarity detection")
+                merge_candidates = self.similarity_detector.find_merge_candidates(
+                    paths, model_lm_head, use_kl, min_group_size
+                )
+        else:
+            # Use traditional similarity detection
+            logger.info(f"[PathMerger] Using traditional similarity detection")
+            merge_candidates = self.similarity_detector.find_merge_candidates(
+                paths, model_lm_head, use_kl, min_group_size
+            )
         
         if not merge_candidates:
             logger.info("[PathMerger] No merge candidates found")
