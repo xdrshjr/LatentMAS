@@ -152,16 +152,32 @@ class ProgressBarManager:
             self.main_bar.close()
             self.main_bar = None
     
-    def write(self, message: str) -> None:
+    def write(self, message: str, file=None) -> None:
         """Write a message above the progress bar.
         
+        This method uses tqdm's write() method to ensure the message appears
+        above the progress bar, keeping the progress bar at the bottom.
+        
         Args:
-            message: Message to write
+            message: Message to write (should include newline if needed)
+            file: Optional file stream (default: sys.stderr)
         """
+        if file is None:
+            file = sys.stderr
+        
         if self.main_bar is not None:
-            self.main_bar.write(message)
+            # Use tqdm's write() method to write above the progress bar
+            # tqdm.write() automatically handles newlines and positioning
+            # Ensure message ends with newline
+            if not message.endswith('\n'):
+                message += '\n'
+            self.main_bar.write(message, file=file)
         else:
-            print(message, file=sys.stderr)
+            # No progress bar, write directly
+            if not message.endswith('\n'):
+                message += '\n'
+            file.write(message)
+            file.flush()
 
 
 # Global progress bar manager instance

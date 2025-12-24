@@ -129,7 +129,7 @@ class ProgressBarHandler(logging.Handler):
     """Custom handler that works with progress bars.
     
     This handler ensures log messages don't interfere with progress bars
-    by writing above them.
+    by writing above them using tqdm's write() method.
     """
     
     def __init__(self, stream=None):
@@ -144,14 +144,33 @@ class ProgressBarHandler(logging.Handler):
     def emit(self, record: logging.LogRecord):
         """Emit a log record.
         
+        This method writes the log message above the progress bar by using
+        tqdm's write() method if a progress bar exists, otherwise writes
+        directly to the stream.
+        
         Args:
             record: Log record to emit
         """
         try:
             msg = self.format(record)
-            # Write to stream
-            self.stream.write(msg + '\n')
-            self.stream.flush()
+            
+            # Try to get the progress bar manager and use its write method
+            # This ensures logs appear above the progress bar
+            try:
+                from progress_utils import get_progress_manager
+                progress_mgr = get_progress_manager()
+                if progress_mgr.main_bar is not None:
+                    # Use tqdm's write() method to write above the progress bar
+                    # tqdm.write() automatically adds a newline and handles positioning
+                    progress_mgr.main_bar.write(msg, file=self.stream)
+                else:
+                    # No progress bar, write directly
+                    self.stream.write(msg + '\n')
+                    self.stream.flush()
+            except (ImportError, AttributeError):
+                # Fallback: write directly if progress manager is not available
+                self.stream.write(msg + '\n')
+                self.stream.flush()
         except Exception:
             self.handleError(record)
 
