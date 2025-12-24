@@ -14,34 +14,39 @@ export all_proxy=socks5://127.0.0.1:7897
 export HF_HOME=/mnt/mydisk/models
 
 # ==================================Basic latent reasoning==================================
-python run.py \
-  --method latent_mas \
-  --model_name Qwen/Qwen3-0.6B \
-  --task gsm8k \
-  --prompt sequential \
-  --temperature 0.5 \
-  --max_samples 20 \
-  --disable_visualization \
-  --generate_bs 1 \
-  --max_new_tokens 2048
-
-
-# ==================================MultiPATH conservative latent reasoning==================================
 #python run.py \
-#  --method latent_mas_multipath \
+#  --method latent_mas \
 #  --model_name Qwen/Qwen3-0.6B \
 #  --task gsm8k \
 #  --prompt sequential \
-#  --config_preset balanced \
-#  --max_samples 20 \
-#  --max_new_tokens 2048 \
-#  --seed 42 \
-#  --generate_bs 1 \
-#  --latent_steps 5 \
-#  --num_paths 20 \
-#  --diversity_strategy 'temperature' \
 #  --temperature 0.5 \
-#  --enable_branching \
-#  --enable_merging \
-#  --latent_consistency_metric cosine \
-#  --disable_visualization
+#  --max_samples 20 \
+#  --disable_visualization \
+#  --generate_bs 1 \
+#  --max_new_tokens 2048
+
+
+# ==================================MultiPATH conservative latent reasoning==================================
+python run.py \
+  --method latent_mas_multipath \
+  --model_name Qwen/Qwen3-0.6B \
+  --task gsm8k \
+  --prompt sequential \
+  --config_preset balanced \
+  --max_samples 50 \
+  --max_new_tokens 1536 \
+  --seed 42 \
+  --generate_bs 1 \
+  --latent_steps 5 \
+  --num_paths 20 \
+  --diversity_strategy 'temperature' \
+  --temperature 0.5 \
+  --top_p 0.95 \
+  --enable_branching \
+  --enable_merging \
+  --pruning_strategy 'adaptive' \
+  --merge_threshold 0.9 \
+  --branch_threshold 0.5 \
+  --latent_space_realign \
+  --latent_consistency_metric 'cosine' \
+  --disable_visualization
