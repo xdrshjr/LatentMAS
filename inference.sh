@@ -31,10 +31,14 @@ python run.py \
   --prompt sequential \
   --config_preset balanced \
   --max_samples 20 \
-  --max_new_tokens 1024 \
+  --max_new_tokens 2048 \
   --seed 42 \
   --generate_bs 1 \
-  --latent_steps 10 \
-  --temperature 0.7 \
+  --latent_steps 5 \
+  --num_paths 20 \
+  --diversity_strategy 'temperature' \
+  --temperature 0.5 \
+  --enable_branching \
+  --enable_merging \
   --latent_consistency_metric cosine \
   --disable_visualization
