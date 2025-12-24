@@ -50,8 +50,10 @@ Usage Examples:
 """
 
 import argparse
+import json
 import logging
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, List, Optional
 
 from run import main
 from utils import normalize_answer
@@ -80,11 +82,116 @@ def create_question_dict(question: str, gold: str = None, solution: str = None) 
     return result
 
 
-def main_direct():
-    """Main function with hardcoded questions and parameters.
+def load_custom_questions_from_json(data_path: str) -> List[Dict]:
+    """Load custom questions from a JSON file.
     
-    Modify the questions list and args_dict below to customize
-    the questions and parameters for your run.
+    Args:
+        data_path: Path to the JSON file containing custom questions.
+                   The JSON file should contain an array of question objects,
+                   each with at least a "question" field, and optionally
+                   "gold" and "solution" fields.
+    
+    Returns:
+        List of question dictionaries in the expected format.
+    
+    Raises:
+        FileNotFoundError: If the JSON file does not exist.
+        json.JSONDecodeError: If the JSON file is invalid.
+        ValueError: If the JSON structure is invalid.
+    """
+    logger.info(f"Loading custom questions from JSON file: {data_path}")
+    logger.debug(f"Resolving absolute path for: {data_path}")
+    
+    # Resolve the path (handles relative paths)
+    json_path = Path(data_path).resolve()
+    logger.debug(f"Resolved absolute path: {json_path}")
+    
+    # Check if file exists
+    if not json_path.exists():
+        error_msg = f"JSON file not found: {json_path}"
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
+    
+    logger.debug(f"JSON file exists, size: {json_path.stat().st_size} bytes")
+    
+    # Read and parse JSON file
+    try:
+        logger.debug("Reading JSON file...")
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        logger.debug("JSON file parsed successfully")
+    except json.JSONDecodeError as e:
+        error_msg = f"Invalid JSON format in file {json_path}: {e}"
+        logger.error(error_msg)
+        raise ValueError(error_msg) from e
+    except Exception as e:
+        error_msg = f"Error reading JSON file {json_path}: {e}"
+        logger.error(error_msg)
+        raise
+    
+    # Validate and process data
+    logger.debug("Validating JSON structure...")
+    
+    # Handle both array format and object with "custom_questions" key
+    if isinstance(data, list):
+        questions = data
+        logger.debug(f"JSON contains array with {len(questions)} items")
+    elif isinstance(data, dict):
+        if "custom_questions" in data:
+            questions = data["custom_questions"]
+            logger.debug(f"JSON contains object with 'custom_questions' key, {len(questions)} items")
+        else:
+            error_msg = f"JSON object must contain 'custom_questions' key or be an array. Found keys: {list(data.keys())}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+    else:
+        error_msg = f"JSON must be an array or an object with 'custom_questions' key. Got type: {type(data)}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    # Validate each question
+    logger.debug("Validating question format...")
+    validated_questions: List[Dict] = []
+    for idx, item in enumerate(questions):
+        if not isinstance(item, dict):
+            logger.warning(f"Question {idx + 1} is not a dictionary, skipping")
+            continue
+        
+        if "question" not in item:
+            logger.warning(f"Question {idx + 1} missing 'question' field, skipping")
+            continue
+        
+        # Normalize the question dict
+        question_dict = {
+            "question": item["question"]
+        }
+        
+        if "gold" in item and item["gold"] is not None:
+            question_dict["gold"] = normalize_answer(str(item["gold"]))
+            logger.debug(f"Question {idx + 1} has gold answer: {question_dict['gold']}")
+        
+        if "solution" in item and item["solution"] is not None:
+            question_dict["solution"] = str(item["solution"])
+            logger.debug(f"Question {idx + 1} has solution")
+        
+        validated_questions.append(question_dict)
+    
+    logger.info(f"Successfully loaded {len(validated_questions)} questions from {json_path}")
+    logger.debug(f"Questions loaded: {len(validated_questions)}/{len(questions)} (some may have been skipped)")
+    
+    if len(validated_questions) == 0:
+        logger.warning("No valid questions found in JSON file")
+    
+    return validated_questions
+
+
+def main_direct(data_path: Optional[str] = None):
+    """Main function that loads questions from JSON file and runs inference.
+    
+    Args:
+        data_path: Optional path to JSON file containing custom questions.
+                   If not provided, will parse from command line arguments.
+                   Default: "data/custom_questions.json"
     
     Example Configurations:
     ----------------------
@@ -107,6 +214,29 @@ def main_direct():
     # Example 5: Single-path baseline (for comparison)
     # method="latent_mas", latent_steps=10
     """
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description="Run inference on custom questions from JSON file",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--data_path",
+        type=str,
+        default="data/custom_questions.json",
+        help="Path to JSON file containing custom questions (default: data/custom_questions.json)"
+    )
+    
+    # Parse arguments
+    args_parsed = parser.parse_args()
+    
+    # Use function parameter if provided, otherwise use command line argument
+    if data_path is not None:
+        final_data_path = data_path
+        logger.debug(f"Using data_path from function parameter: {final_data_path}")
+    else:
+        final_data_path = args_parsed.data_path
+        logger.debug(f"Using data_path from command line argument: {final_data_path}")
+    
     # Setup logging early (will be reconfigured in main() but we need it for initial messages)
     setup_logging(
         log_level="DEBUG",
@@ -117,59 +247,26 @@ def main_direct():
     )
     
     logger.info("=" * 80)
-    logger.info("Starting direct run with hardcoded questions")
+    logger.info("Starting direct run with custom questions from JSON file")
     logger.info("=" * 80)
     
     # ============================================================================
-    # HARDCODED QUESTIONS - Modify this list to add/change questions
+    # LOAD QUESTIONS FROM JSON FILE
     # ============================================================================
-    custom_questions: List[Dict] = [
-        create_question_dict(
-            question="Tom has 15 books. He gives 3 books to his friend and buys 7 new books. How many books does Tom have now?",
-            gold="19",
-            solution="19"
-        ),
-        create_question_dict(
-            question="There are 30 students in a class. 12 students are boys. How many students are girls?",
-            gold="18",
-            solution="18"
-        ),
-        create_question_dict(
-            question="Mary does her grocery shopping on Saturday. She does her shopping only at a specific store where she is allowed a credit of $100, which must be paid in full before her next shopping trip. That week she spent the full credit limit and paid $15 of it on Tuesday and $23 of it on Thursday. How much credit will Mary need to pay before her next shopping trip?",
-            gold="62",
-            solution="62"
-        ),
-        create_question_dict(
-            question="A concert ticket costs $40. Mr. Benson bought 12 tickets and received a 5% discount for every ticket bought that exceeds 10. How much did Mr. Benson pay in all?",
-            gold="476",
-            solution="476"
-        ),
-        create_question_dict(
-            question="On a school trip to the seashore, Alan and his friends collected shells. Alan collected four times as many shells as Ben did. Ben got a late start and only collected a third of what Laurie did. If Laurie collected 36 shells how many did Alan collect?",
-            gold="48",
-            solution="48"
-        ),
-        create_question_dict(
-            question="A robe takes 2 bolts of blue fiber and half that much white fiber.  How many bolts in total does it take?",
-            gold="3",
-            solution="3"
-        ),
-        create_question_dict(
-            question="Josh decides to try flipping a house.  He buys a house for $80,000 and then puts in $50,000 in repairs.  This increased the value of the house by 150%.  How much profit did he make?",
-            gold="70000",
-            solution="70000"
-        ),
-        # Add more questions here as needed
-        # create_question_dict(
-        #     question="Your question here",
-        #     gold="expected answer",
-        #     solution="solution steps"
-        # ),
-    ]
+    logger.info(f"Loading questions from: {final_data_path}")
+    try:
+        custom_questions: List[Dict] = load_custom_questions_from_json(final_data_path)
+    except Exception as e:
+        logger.error(f"Failed to load questions from JSON file: {e}")
+        raise
     
-    logger.info(f"Loaded {len(custom_questions)} hardcoded questions")
+    logger.info(f"Successfully loaded {len(custom_questions)} questions from JSON file")
     for idx, q in enumerate(custom_questions, 1):
         logger.debug(f"Question {idx}: {q['question'][:50]}...")
+        if 'gold' in q:
+            logger.debug(f"  Gold answer: {q['gold']}")
+        if 'solution' in q:
+            logger.debug(f"  Has solution: Yes")
     
     # ============================================================================
     # HARDCODED PARAMETERS - Modify this dictionary to change parameters
@@ -180,7 +277,7 @@ def main_direct():
     #
     args_dict = {
         # Core parameters
-        "method": "latent_mas_multipath",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
+        "method": "latent_mas",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
         "model_name": "Qwen/Qwen3-0.6B",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
         "max_samples": len(custom_questions),  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
@@ -191,7 +288,7 @@ def main_direct():
         # Generation parameters
         "max_new_tokens": 2048,  # Maximum tokens to generate
         "latent_steps": 5,  # Number of latent steps (for latent_mas and latent_mas_multipath)
-        "temperature": 0.5,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
+        "temperature": 0.6,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
         "top_p": 0.95,  # Top-p sampling parameter
         "generate_bs": 20,  # Batch size for generation
         
