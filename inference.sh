@@ -1,8 +1,17 @@
-export CUDA_VISIBLE_DEVICES=0
-export https_proxy=http://127.0.0.1:7890;
-export http_proxy=http://127.0.0.1:7890;
-export all_proxy=socks5://127.0.0.1:7890;
-export HF_HOME="/autodl-fs/data/models"
+
+# ==================================Cloud Compute==================================
+#export CUDA_VISIBLE_DEVICES=0
+#export https_proxy=http://127.0.0.1:7890;
+#export http_proxy=http://127.0.0.1:7890;
+#export all_proxy=socks5://127.0.0.1:7890;
+#export HF_HOME=/autodl-fs/data/models
+
+# ==================================Local Compute==================================
+export CUDA_VISIBLE_DEVICES=1
+export https_proxy=http://127.0.0.1:7897
+export http_proxy=http://127.0.0.1:7897
+export all_proxy=socks5://127.0.0.1:7897
+export HF_HOME=/mnt/mydisk/models
 
 # Basic latent reasoning
 #python run.py \
@@ -17,13 +26,14 @@ export HF_HOME="/autodl-fs/data/models"
 # MultiPATH conservative latent reasoning
 python run.py \
   --method latent_mas_multipath \
-  --model_name Qwen/Qwen3-4B \
+  --model_name Qwen/Qwen3-0.6B \
   --task gsm8k \
   --prompt sequential \
   --config_preset balanced \
-  --max_samples -1 \
+  --max_samples 20 \
   --max_new_tokens 1024 \
   --seed 42 \
+  --generate_bs 1 \
   --latent_steps 10 \
   --temperature 0.7 \
   --latent_consistency_metric cosine \
