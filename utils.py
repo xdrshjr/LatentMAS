@@ -503,6 +503,27 @@ def create_output_file_path(task: str, method: str, model_name: str) -> str:
     return output_path
 
 
+def create_result_log_file_path(task: str, method: str) -> str:
+    """Create a standardized result log file path for run summary.
+    
+    Args:
+        task: Task name (e.g., 'gsm8k', 'custom')
+        method: Method name (e.g., 'latent_mas_multipath')
+        
+    Returns:
+        Path to result log file in output/simple_res/ directory
+    """
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_dir = Path('output') / 'simple_res'
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    log_filename = f"{method}_{task}_{timestamp}.log"
+    log_path = str(output_dir / log_filename)
+    
+    output_logger.debug(f"[Output] Created result log file path: {log_path}")
+    return log_path
+
+
 def save_question_answer_record(
     output_file: str,
     problem_idx: int,

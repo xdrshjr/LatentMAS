@@ -20,7 +20,7 @@ from methods.latent_mas import LatentMASMethod
 from methods.latent_mas_multipath import LatentMASMultiPathMethod
 from methods.text_mas import TextMASMethod
 from models import ModelWrapper
-from utils import auto_device, set_seed, create_output_file_path, save_question_answer_record
+from utils import auto_device, set_seed, create_output_file_path, save_question_answer_record, create_result_log_file_path
 from config import ConfigLoader, MultiPathConfig, list_presets, get_preset_description
 from logging_config import setup_logging, create_log_file_path
 from progress_utils import get_progress_manager, reset_progress_manager
@@ -511,6 +511,141 @@ def run_custom_questions(
     return preds
 
 
+def save_run_result_log(
+    args: argparse.Namespace,
+    total_time: float,
+    acc: float,
+    correct: int,
+    total: int,
+    custom_questions: Optional[List[Dict]] = None
+) -> None:
+    """Save run parameters and final results to a log file.
+    
+    This function records the complete run summary including all parameters
+    and final results (accuracy, success rate, etc.) to a dedicated log file
+    for later analysis.
+    
+    Args:
+        args: Command line arguments namespace containing all run parameters
+        total_time: Total processing time in seconds
+        acc: Final accuracy score
+        correct: Number of correct predictions
+        total: Total number of samples processed
+        custom_questions: Optional list of custom questions (to determine if custom mode)
+    """
+    try:
+        # Create result log file path
+        task_name = args.task if custom_questions is None else "custom"
+        log_file_path = create_result_log_file_path(task_name, args.method)
+        
+        # Collect all run parameters
+        run_params = {
+            # Core parameters
+            "method": args.method,
+            "model_name": args.model_name,
+            "task": task_name,
+            "split": args.split if custom_questions is None else "custom",
+            "max_samples": args.max_samples,
+            "seed": args.seed,
+            "device": args.device,
+            "prompt": getattr(args, 'prompt', 'sequential'),
+            
+            # Generation parameters
+            "max_new_tokens": args.max_new_tokens,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "generate_bs": args.generate_bs,
+            
+            # Method-specific parameters
+            "latent_steps": getattr(args, 'latent_steps', None),
+            "text_mas_context_length": getattr(args, 'text_mas_context_length', -1),
+            "think": getattr(args, 'think', False),
+            "latent_space_realign": getattr(args, 'latent_space_realign', False),
+            
+            # vLLM parameters
+            "use_vllm": getattr(args, 'use_vllm', False),
+            "enable_prefix_caching": getattr(args, 'enable_prefix_caching', False),
+            "use_second_HF_model": getattr(args, 'use_second_HF_model', False),
+            "device2": getattr(args, 'device2', None),
+            "tensor_parallel_size": getattr(args, 'tensor_parallel_size', 1),
+            "gpu_memory_utilization": getattr(args, 'gpu_memory_utilization', 0.9),
+            
+            # Multi-path specific parameters (if applicable)
+            "num_paths": getattr(args, 'num_paths', None),
+            "enable_branching": getattr(args, 'enable_branching', None),
+            "enable_merging": getattr(args, 'enable_merging', None),
+            "pruning_strategy": getattr(args, 'pruning_strategy', None),
+            "merge_threshold": getattr(args, 'merge_threshold', None),
+            "branch_threshold": getattr(args, 'branch_threshold', None),
+            "diversity_strategy": getattr(args, 'diversity_strategy', None),
+            "latent_consistency_metric": getattr(args, 'latent_consistency_metric', None),
+            
+            # Configuration file parameters
+            "config": getattr(args, 'config', None),
+            "config_preset": getattr(args, 'config_preset', None),
+            
+            # Visualization
+            "enable_visualization": getattr(args, 'enable_visualization', True),
+        }
+        
+        # Remove None values for cleaner output
+        run_params = {k: v for k, v in run_params.items() if v is not None}
+        
+        # Final results
+        results = {
+            "accuracy": acc,
+            "success_rate": acc,  # Same as accuracy
+            "correct": correct,
+            "total": total,
+            "total_time_sec": round(total_time, 4),
+            "time_per_sample_sec": round(total_time / total, 4) if total > 0 else 0.0,
+        }
+        
+        # Write to log file
+        with open(log_file_path, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write("RUN SUMMARY LOG\n")
+            f.write("=" * 80 + "\n")
+            f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("\n")
+            
+            f.write("-" * 80 + "\n")
+            f.write("RUN PARAMETERS\n")
+            f.write("-" * 80 + "\n")
+            for key, value in sorted(run_params.items()):
+                f.write(f"  {key}: {value}\n")
+            f.write("\n")
+            
+            f.write("-" * 80 + "\n")
+            f.write("FINAL RESULTS\n")
+            f.write("-" * 80 + "\n")
+            f.write(f"  Accuracy: {results['accuracy']:.4f} ({results['accuracy']*100:.2f}%)\n")
+            f.write(f"  Success Rate: {results['success_rate']:.4f} ({results['success_rate']*100:.2f}%)\n")
+            f.write(f"  Correct: {results['correct']}\n")
+            f.write(f"  Total: {results['total']}\n")
+            f.write(f"  Total Time: {results['total_time_sec']:.4f} seconds\n")
+            f.write(f"  Time per Sample: {results['time_per_sample_sec']:.4f} seconds\n")
+            f.write("\n")
+            
+            f.write("-" * 80 + "\n")
+            f.write("RESULTS JSON\n")
+            f.write("-" * 80 + "\n")
+            result_json = json.dumps({
+                "parameters": run_params,
+                "results": results,
+                "timestamp": datetime.now().isoformat(),
+            }, ensure_ascii=False, indent=2)
+            f.write(result_json + "\n")
+            f.write("=" * 80 + "\n")
+        
+        logger.info(f"Run summary saved to: {log_file_path}")
+        logger.debug(f"Result log contains parameters and final results for analysis")
+        
+    except Exception as e:
+        logger.error(f"Failed to save run result log: {e}", exc_info=True)
+        logger.debug(f"Result log save error: {type(e).__name__}: {str(e)}")
+
+
 def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.Namespace] = None):
     """Main function to run evaluation on datasets or custom questions.
     
@@ -527,7 +662,6 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         parser.add_argument("--method", choices=["baseline", "text_mas", "latent_mas", "latent_mas_multipath"], required=True,
                             help="Which multi-agent method to run: 'baseline', 'text_mas', 'latent_mas', or 'latent_mas_multipath'.")
         parser.add_argument("--model_name", type=str, required=True,
-                            choices=["Qwen/Qwen3-0.6B", "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"],
                             help="Model choices to use for experiments (e.g. 'Qwen/Qwen3-14B').")
         parser.add_argument("--max_samples", type=int, default=-1, help="Number of questions to evaluate; set -1 to use all samples.")
         parser.add_argument("--task", choices=["gsm8k", "aime2024", "aime2025", "gpqa", "arc_easy", "arc_challenge", "mbppplus", 'humanevalplus', 'medqa'], default="gsm8k",
@@ -923,6 +1057,16 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
     print(result_json)
     print("="*80)
     logger.debug(f"Result JSON: {result_json}")
+    
+    # Save run parameters and results to log file
+    save_run_result_log(
+        args=args,
+        total_time=total_time,
+        acc=acc,
+        correct=correct,
+        total=len(preds),
+        custom_questions=custom_questions
+    )
 
 
 
