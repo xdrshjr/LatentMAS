@@ -278,7 +278,7 @@ def main_direct(data_path: Optional[str] = None):
     args_dict = {
         # Core parameters
         "method": "latent_mas_multipath",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
-        "model_name": "Qwen/Qwen3-0.6B",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
+        "model_name": "/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
         "max_samples": len(custom_questions),  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
         "prompt": "sequential",  # Options: "sequential", "hierarchical"
@@ -287,7 +287,7 @@ def main_direct(data_path: Optional[str] = None):
         
         # Generation parameters
         "max_new_tokens": 2048,  # Maximum tokens to generate
-        "latent_steps": 5,  # Number of latent steps (for latent_mas and latent_mas_multipath)
+        "latent_steps": 2,  # Number of latent steps (for latent_mas and latent_mas_multipath)
         "temperature": 0.5,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
         "top_p": 0.95,  # Top-p sampling parameter
         "generate_bs": 1,  # Batch size for generation
@@ -310,11 +310,11 @@ def main_direct(data_path: Optional[str] = None):
                                  # Higher = only merge very similar paths, Lower = merge more aggressively
         "branch_threshold": 0.5,  # Uncertainty threshold for branching (0.0-1.0)
                                   # Higher = branch less often, Lower = branch more often
-        "diversity_strategy": "temperature",  # Options: "temperature", "noise", "hybrid"
+        "diversity_strategy": "hybrid",  # Options: "temperature", "noise", "hybrid"
                                         # - "temperature": Use different temperatures per path
                                         # - "noise": Add noise to hidden states
                                         # - "hybrid": Combine both strategies (recommended)
-        "latent_consistency_metric": "cosine",  # Options: "cosine", "euclidean", "l2", "kl_divergence"
+        "latent_consistency_metric": "kl_divergence",  # Options: "cosine", "euclidean", "l2", "kl_divergence"
                                                 # Similarity metric for latent consistency scoring
                                                 # - "cosine": Cosine similarity (default, fast and effective)
                                                 # - "euclidean": Euclidean distance

@@ -371,7 +371,7 @@ class AdaptivePruning(PruningStrategy):
         min_keep_ratio: float = 0.3,
         max_keep_ratio: float = 0.8,
         min_paths: int = 2,
-        consistency_threshold: float = 0.3,
+        consistency_threshold: float = 0.90,
         prioritize_consistency: bool = True
     ):
         """Initialize the adaptive pruning strategy.

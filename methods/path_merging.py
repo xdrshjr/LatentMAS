@@ -887,9 +887,9 @@ class PathMerger:
                     f"(path {path1.path_id}: {path1.score:.4f}, path {path2.path_id}: {path2.score:.4f})")
         
         # All checks passed
-        logger.info(f"[PathMerger] ✓✓✓ All checks passed for paths {path1.path_id} and {path2.path_id}")
-        logger.info(f"[PathMerger]   Consistency: ({consistency1:.4f}, {consistency2:.4f})")
-        logger.info(f"[PathMerger]   Scores: ({path1.score:.4f}, {path2.score:.4f}), diff={score_diff:.4f}")
+        logger.debug(f"[PathMerger] ✓✓✓ All checks passed for paths {path1.path_id} and {path2.path_id}")
+        logger.debug(f"[PathMerger]   Consistency: ({consistency1:.4f}, {consistency2:.4f})")
+        logger.debug(f"[PathMerger]   Scores: ({path1.score:.4f}, {path2.score:.4f}), diff={score_diff:.4f}")
         return True, "all_checks_passed"
     
     def select_merge_strategy(
@@ -1006,10 +1006,10 @@ class PathMerger:
                             }
                         )
                         merge_candidates.append(candidate)
-                        logger.info(f"[PathMerger] ✓ Merge candidate approved: paths [{path1.path_id}, {path2.path_id}]")
-                        logger.info(f"[PathMerger]   - Consistency: [{consistency1:.4f}, {consistency2:.4f}] (avg={avg_consistency:.4f})")
-                        logger.info(f"[PathMerger]   - Scores: [{path1.score:.4f}, {path2.score:.4f}] (diff={score_diff:.4f})")
-                        logger.info(f"[PathMerger]   - Reason: {reason}")
+                        logger.debug(f"[PathMerger] ✓ Merge candidate approved: paths [{path1.path_id}, {path2.path_id}]")
+                        logger.debug(f"[PathMerger]   - Consistency: [{consistency1:.4f}, {consistency2:.4f}] (avg={avg_consistency:.4f})")
+                        logger.debug(f"[PathMerger]   - Scores: [{path1.score:.4f}, {path2.score:.4f}] (diff={score_diff:.4f})")
+                        logger.debug(f"[PathMerger]   - Reason: {reason}")
                     else:
                         # Log why merge was rejected
                         logger.debug(f"[PathMerger] ✗ Merge rejected: paths [{path1.path_id}, {path2.path_id}] - {reason}")

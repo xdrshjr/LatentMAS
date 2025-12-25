@@ -479,7 +479,7 @@ class ModelWrapper:
         logger.info(f"[Path Generation] Generating {num_paths} paths with random perturbations")
         
         for path_idx in range(num_paths):   # 遍历10条路径，每条路径都有5个latent思考步骤
-            logger.info(f"[Path Generation] Starting path {path_idx + 1}/{num_paths}")
+            logger.debug(f"[Path Generation] Starting path {path_idx + 1}/{num_paths}")
             
             # Get temperature for this path (will be used for diversity)
             temperature = diversity_strategy.get_temperature(path_idx, num_paths)
@@ -598,7 +598,7 @@ class ModelWrapper:
             }
             paths.append(path_info)
             
-            logger.info(f"[Path Generation] Completed path {path_idx + 1}/{num_paths} - final hidden norm: {hidden_norm:.4f}, "
+            logger.debug(f"[Path Generation] Completed path {path_idx + 1}/{num_paths} - final hidden norm: {hidden_norm:.4f}, "
                        f"latent_history: {latent_memory_mb:.2f}MB, hidden_states: {hidden_memory_mb:.2f}MB")
             logger.debug(f"[Path Generation] Path {path_idx + 1} metadata: {path_info['metadata']}")
             
@@ -712,7 +712,7 @@ class ModelWrapper:
         logger.info(f"[Branching] Generating {num_branches} branches with random perturbations")
         
         for branch_idx in range(num_branches):
-            logger.info(f"[Branching] Creating branch {branch_idx + 1}/{num_branches}")
+            logger.debug(f"[Branching] Creating branch {branch_idx + 1}/{num_branches}")
             
             # Get temperature for this branch
             temperature = diversity_strategy.get_temperature(branch_idx, num_branches)
@@ -809,7 +809,7 @@ class ModelWrapper:
             }
             branches.append(branch_info)
             
-            logger.info(f"[Branching] Completed branch {branch_idx + 1}/{num_branches} - final hidden norm: {hidden_norm:.4f}, "
+            logger.debug(f"[Branching] Completed branch {branch_idx + 1}/{num_branches} - final hidden norm: {hidden_norm:.4f}, "
                        f"latent_history: {latent_memory_mb:.2f}MB, hidden_states: {hidden_memory_mb:.2f}MB")
             logger.debug(f"[Branching] Branch {branch_idx + 1} metadata: {branch_info['metadata']}")
             

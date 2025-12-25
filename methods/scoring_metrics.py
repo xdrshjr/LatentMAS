@@ -333,7 +333,7 @@ class PerplexityScorer(BaseScorer):
             # Use exponential decay to map perplexity to score
             score = self._perplexity_to_score(perplexity)
             
-            logger.info(f"[PerplexityScorer] Path {path_state.path_id}: "
+            logger.debug(f"[PerplexityScorer] Path {path_state.path_id}: "
                        f"perplexity={perplexity:.4f}, score={score:.4f}")
             
             # Clean up any temporary tensors created during scoring
@@ -1480,7 +1480,7 @@ class EnsembleScorer(BaseScorer):
         # Compute weighted average
         ensemble_score = sum(weighted_scores) / total_weight
         
-        logger.info(f"[EnsembleScorer] Ensemble score for path {path_state.path_id}: {ensemble_score:.4f}")
+        logger.debug(f"[EnsembleScorer] Ensemble score for path {path_state.path_id}: {ensemble_score:.4f}")
         logger.debug(f"[EnsembleScorer] Score breakdown: {score_breakdown}")
         
         return ensemble_score
@@ -1532,7 +1532,7 @@ class EnsembleScorer(BaseScorer):
         
         ensemble_score = sum(weighted_scores) / total_weight
         
-        logger.info(f"[EnsembleScorer] Ensemble score for path {path_state.path_id}: {ensemble_score:.4f}")
+        logger.debug(f"[EnsembleScorer] Ensemble score for path {path_state.path_id}: {ensemble_score:.4f}")
         
         return ensemble_score, score_breakdown
     

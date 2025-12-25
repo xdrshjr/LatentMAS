@@ -402,7 +402,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
             if agent.role != "judger":
                 # Non-judger agent: multi-path latent reasoning
                 logger.info(f"[{agent.name}] Starting multi-path latent reasoning")
-                logger.info(f"[{agent.name}] Configuration: {self.num_paths} paths, {self.latent_steps} latent steps per path")
+                logger.debug(f"[{agent.name}] Configuration: {self.num_paths} paths, {self.latent_steps} latent steps per path")
                 logger.debug(f"[{agent.name}] Pruning strategy: {self.pruning_strategy.__class__.__name__}")
                 logger.debug(f"[{agent.name}] Diversity strategy: {self.diversity_strategy.__class__.__name__}")
                 
@@ -431,7 +431,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     if torch.cuda.is_available():
                         gpu_mem_item_start = torch.cuda.memory_allocated() / 1024**3
                         gpu_mem_reserved_start = torch.cuda.memory_reserved() / 1024**3
-                        logger.info(f"[GPU Memory] Item {batch_idx + 1} start: allocated={gpu_mem_item_start:.2f}GB, reserved={gpu_mem_reserved_start:.2f}GB")
+                        logger.debug(f"[GPU Memory] Item {batch_idx + 1} start: allocated={gpu_mem_item_start:.2f}GB, reserved={gpu_mem_reserved_start:.2f}GB")
                     
                     # Get input for this item
                     item_ids = wrapped_ids[batch_idx:batch_idx+1]
@@ -471,7 +471,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             gpu_mem_before_gen = torch.cuda.memory_allocated() / 1024**3
                             logger.info(f"[{agent.name}] GPU memory before path generation: {gpu_mem_before_gen:.2f}GB")
                         
-                        logger.info(f"[{agent.name}] Generating {self.num_paths} diverse reasoning paths")
+                        logger.debug(f"[{agent.name}] Generating {self.num_paths} diverse reasoning paths")
                         logger.debug(f"[{agent.name}] Each path will perform {self.latent_steps} latent thinking steps")
                         path_dicts = self.model.generate_diverse_latent_paths(
                             input_ids=item_ids,
@@ -480,12 +480,12 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             latent_steps=self.latent_steps,
                             diversity_strategy=self.diversity_strategy,
                             past_key_values=past_kv,
-                        )   # 获取多样的推理路径，10条路径，每条路径有5个latent思考步骤
+                        )   # 获取多样的推理路径，10条路径，每条路径有5个latent思考步骤， [10, 5]
                     
                     if torch.cuda.is_available():
                         gpu_mem_after_gen = torch.cuda.memory_allocated() / 1024**3
                         mem_increase = gpu_mem_after_gen - gpu_mem_before_gen
-                        logger.info(f"[{agent.name}] GPU memory after path generation: {gpu_mem_after_gen:.2f}GB "
+                        logger.debug(f"[{agent.name}] GPU memory after path generation: {gpu_mem_after_gen:.2f}GB "
                                    f"(+{mem_increase:.2f}GB for {self.num_paths} paths)")
                     
                     # Convert to PathState objects
@@ -527,10 +527,10 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     if self.latent_consistency_scorer is not None and len(new_paths) > 1:
                         logger.info(f"[{agent.name}] Computing individual latent consistency for {len(new_paths)} paths")
                         individual_consistency_scores = self.latent_consistency_scorer.score_individual_paths(new_paths)
-                        logger.info(f"[{agent.name}] Individual consistency scores: "
-                                  f"min={min(individual_consistency_scores):.4f}, "
-                                  f"max={max(individual_consistency_scores):.4f}, "
-                                  f"mean={np.mean(individual_consistency_scores):.4f}")
+                        logger.info(f"[{agent.name}] Individual consistency scores: {individual_consistency_scores} "
+                                    f"(min={min(individual_consistency_scores):.4f}, "
+                                    f"max={max(individual_consistency_scores):.4f}, "
+                                    f"mean={np.mean(individual_consistency_scores):.4f})")
                     
                     # Score each path individually
                     for path_idx, path in enumerate(new_paths):
@@ -552,11 +552,11 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             
                             path.metadata['base_score'] = base_score
                             path.metadata['latent_consistency'] = path_consistency
-                            logger.info(f"[{agent.name}] Path {path.path_id}: base={base_score:.4f}, "
+                            logger.debug(f"[{agent.name}] Path {path.path_id}: base={base_score:.4f}, "
                                       f"consistency={path_consistency:.4f}, final={final_score:.4f}")
                         else:
                             final_score = base_score
-                            logger.info(f"[{agent.name}] Path {path.path_id} score: {final_score:.4f}")
+                            logger.debug(f"[{agent.name}] Path {path.path_id} score: {final_score:.4f}")
                         
                         path.update_state(score=final_score)
                         logger.debug(f"[{agent.name}] Path {path.path_id} metadata: {path.metadata}")
@@ -595,7 +595,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                               f"{[f'({pid}:{score:.4f})' for pid, score in all_scores]}")
                     
                     # Detect if current agent is Refiner (倒数第二个 agent)
-                    is_refiner = (agent_idx == len(self.agents) - 2)
+                    is_refiner = (agent.role == "refiner")
                     is_judger = (agent.role == "judger")
                     
                     if is_refiner:
