@@ -21,6 +21,7 @@ from .scoring_metrics import EnsembleScorer, SelfConsistencyScorer, PerplexitySc
 from .pruning_strategies import TopKPruning, AdaptivePruning, DiversityAwarePruning, BudgetBasedPruning
 from .path_merging import PathMerger, WeightedMergeStrategy, AverageMergeStrategy, PathSimilarityDetector
 from .diversity_strategies import HybridDiversityStrategy, TemperatureDiversityStrategy, NoiseDiversityStrategy
+from .latent_prm import LatentPRMDataCollector, PathTreeBuilder, PRMDataStorage, PRMScorer
 from models import ModelWrapper, _past_length
 from prompts import build_agent_message_sequential_latent_mas, build_agent_message_hierarchical_latent_mas
 from utils import extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
@@ -170,7 +171,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
             latent_consistency_scorer = LatentConsistencyScorer(
                 similarity_metric=self.latent_consistency_metric,
                 aggregation_method='mean',
-                use_last_latent=True
+                use_last_latent=False
             )
             self.latent_consistency_scorer = latent_consistency_scorer
             self.latent_consistency_weight = scoring_weights['latent_consistency']
@@ -199,6 +200,78 @@ class LatentMASMultiPathMethod(LatentMASMethod):
             merge_strategy=WeightedMergeStrategy(),
         )
         logger.debug(f"[LatentMASMultiPathMethod] Initialized PathMerger with threshold: {merge_threshold}")
+        
+        # Initialize PRM data collection components (disabled by default)
+        self.prm_data_collector = None
+        self.prm_tree_builder = None
+        self.prm_data_storage = None
+        self.prm_scorer = None
+        self.collect_prm_data = False
+        logger.debug("[LatentMASMultiPathMethod] PRM data collection initialized (disabled by default)")
+    
+    def enable_prm_data_collection(
+        self,
+        output_dir: str = "prm_data",
+        disable_pruning: bool = True,
+        disable_merging: bool = True
+    ) -> None:
+        """Enable PRM training data collection mode.
+        
+        In this mode:
+        - All paths are collected (no pruning/merging by default)
+        - Path relationships are tracked
+        - Final answer correctness is recorded
+        - Data is saved for PRM training
+        
+        Args:
+            output_dir: Directory to save collected data (default: prm_data at project root)
+            disable_pruning: Disable pruning to collect all paths
+            disable_merging: Disable merging to collect all paths
+        """
+        logger.info("=" * 80)
+        logger.info("[LatentMASMultiPathMethod] Enabling PRM data collection mode")
+        logger.info("=" * 80)
+        logger.info(f"[LatentMASMultiPathMethod] Output directory: {output_dir}")
+        logger.debug(f"[LatentMASMultiPathMethod] Disable pruning: {disable_pruning}")
+        logger.debug(f"[LatentMASMultiPathMethod] Disable merging: {disable_merging}")
+        
+        self.collect_prm_data = True
+        
+        # Initialize PRM components
+        logger.info("[LatentMASMultiPathMethod] Initializing PRM data collection components")
+        self.prm_data_collector = LatentPRMDataCollector(enabled=True)
+        logger.debug("[LatentMASMultiPathMethod] ✓ LatentPRMDataCollector initialized")
+        
+        self.prm_tree_builder = PathTreeBuilder()
+        logger.debug("[LatentMASMultiPathMethod] ✓ PathTreeBuilder initialized")
+        
+        self.prm_data_storage = PRMDataStorage(output_dir=output_dir)
+        logger.debug("[LatentMASMultiPathMethod] ✓ PRMDataStorage initialized")
+        
+        self.prm_scorer = PRMScorer(correct_score=1.0, incorrect_score=0.0)
+        logger.debug("[LatentMASMultiPathMethod] ✓ PRMScorer initialized")
+        
+        # Optionally disable pruning and merging for maximum path diversity
+        if disable_pruning:
+            logger.info("[LatentMASMultiPathMethod] Disabling pruning for data collection")
+            # We'll handle this in run_batch by skipping pruning logic
+            self._prm_disable_pruning = True
+        else:
+            self._prm_disable_pruning = False
+        
+        if disable_merging:
+            logger.info("[LatentMASMultiPathMethod] Disabling merging for data collection")
+            self._prm_disable_merging = True
+        else:
+            self._prm_disable_merging = False
+        
+        logger.info("=" * 80)
+        logger.info("[LatentMASMultiPathMethod] ✓ PRM data collection mode ENABLED")
+        logger.info(f"[LatentMASMultiPathMethod] Configuration:")
+        logger.info(f"  - Output directory: {output_dir}")
+        logger.info(f"  - Disable pruning: {disable_pruning}")
+        logger.info(f"  - Disable merging: {disable_merging}")
+        logger.info("=" * 80)
     
     def _create_diversity_strategy(self, strategy_name: str, base_temperature: float):
         """Create diversity strategy based on name with baseline temperature.
@@ -336,6 +409,17 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         batch_size = len(items)
         logger.info(f"Processing batch of {batch_size} items with {self.num_paths} paths per item")
         
+        # PRM data collection: Start collecting for each question in batch
+        if self.collect_prm_data and self.prm_data_collector:
+            logger.info("[PRM DataCollection] Starting data collection for batch")
+            for batch_idx, item in enumerate(items):
+                question_id = f"q_{batch_idx}"
+                self.prm_data_collector.start_question(
+                    question_id=question_id,
+                    question=item["question"],
+                    gold_answer=item.get("gold", "")
+                )
+        
         # CRITICAL: Clear PathManager before batch to ensure complete independence between batches
         # This prevents cross-batch accumulation of paths and GPU memory leaks
         if len(self.path_manager.paths) > 0:
@@ -450,10 +534,12 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     
                     # Get past KV cache from previous paths (if any)
                     past_kv = None
+                    parent_path_id = None
                     if batch_paths[batch_idx]:
                         # Use KV cache from the best path so far
                         best_path = max(batch_paths[batch_idx], key=lambda p: p.score)
                         past_kv = best_path.kv_cache
+                        parent_path_id = best_path.path_id  # Track parent for PRM data collection
                         logger.debug(f"[LatentMASMultiPathMethod.run_batch] Using KV cache from path "
                                    f"{best_path.path_id} (score: {best_path.score:.4f})")
                     
@@ -511,6 +597,15 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             # Only store non-tensor metadata
                             if not isinstance(v, torch.Tensor):
                                 clean_metadata[k] = v
+                        
+                        # Add agent information to metadata
+                        clean_metadata['agent_name'] = agent.name
+                        clean_metadata['agent_idx'] = agent_idx
+                        clean_metadata['batch_idx'] = batch_idx
+                        
+                        # Add parent path ID for PRM data collection
+                        if parent_path_id is not None:
+                            clean_metadata['parent_path_id'] = parent_path_id
                         
                         path_state = PathState(
                             path_id=path_id,
@@ -571,6 +666,25 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         
                         path.update_state(score=final_score)
                         logger.debug(f"[{agent.name}] Path {path.path_id} metadata: {path.metadata}")
+                        
+                        # PRM data collection: Record this path
+                        if self.collect_prm_data and self.prm_data_collector:
+                            # Determine parent path ID
+                            parent_path_id = path.metadata.get('parent_path_id', None)
+                            
+                            # Record the path
+                            self.prm_data_collector.record_path(
+                                path_id=path.path_id,
+                                agent_name=agent.name,
+                                agent_idx=agent_idx,
+                                parent_path_id=parent_path_id,
+                                latent_history=path.latent_history,
+                                hidden_states=path.hidden_states,
+                                score=final_score,
+                                metadata=path.metadata.copy() if path.metadata else {}
+                            )
+                            logger.debug(f"[PRM DataCollection] Recorded path {path.path_id} "
+                                       f"for agent {agent.name} (parent: {parent_path_id})")
                     
                     # Clean up consistency scores list after scoring
                     if individual_consistency_scores is not None:
@@ -613,39 +727,43 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         logger.info(f"[{agent.name}] Detected Refiner stage (agent {agent_idx + 1}/{len(self.agents)})")
                         logger.info(f"[{agent.name}] Will force pruning to keep ONLY 1 path for final Judger")
                     
-                    # Prune low-quality paths
-                    if torch.cuda.is_available():
-                        gpu_mem_before_prune = torch.cuda.memory_allocated() / 1024**3
-                        logger.debug(f"[{agent.name}] GPU memory before pruning: {gpu_mem_before_prune:.2f}GB")
-                    
-                    logger.info(f"[{agent.name}] Pruning low-quality paths using {self.pruning_strategy.__class__.__name__}")
-                    logger.debug(f"[{agent.name}] Pre-pruning path scores: {[f'{p.path_id}:{p.score:.4f}' for p in new_paths]}")
-                    
-                    # For Refiner, force keep_count=1 to ensure only 1 path for Judger
-                    if is_refiner:
-                        logger.info(f"[{agent.name}] Forcing pruning to keep exactly 1 path (Refiner strategy)")
-                        pruned_paths = self.pruning_strategy.prune(
-                            paths=new_paths,
-                            current_step=agent_idx,
-                            total_steps=len(self.agents),
-                            force_keep_count=1,  # Force Refiner to keep only 1 path
-                        )
+                    # Prune low-quality paths (skip if in PRM data collection mode)
+                    if self.collect_prm_data and self._prm_disable_pruning:
+                        logger.info(f"[{agent.name}] PRM data collection mode: SKIPPING pruning to collect all paths")
+                        pruned_paths = new_paths
                     else:
-                        # Pass k parameter when using topk strategy
-                        prune_kwargs = {
-                            "paths": new_paths,
-                            "current_step": agent_idx,
-                            "total_steps": len(self.agents),
-                        }
-                        if isinstance(self.pruning_strategy, TopKPruning):
-                            prune_kwargs["k"] = self.topk_k
-                            logger.debug(f"[{agent.name}] Using topk pruning with k={self.topk_k}")
-                        pruned_paths = self.pruning_strategy.prune(**prune_kwargs)
-                    
-                    logger.info(f"[{agent.name}] Pruning complete: kept {len(pruned_paths)}/{len(new_paths)} paths")
-                    kept_paths_info = [(p.path_id, p.score) for p in pruned_paths]
-                    logger.info(f"[{agent.name}] Kept paths (sorted by score desc): "
-                              f"{[f'Path{pid}={score:.4f}' for pid, score in kept_paths_info]}")
+                        if torch.cuda.is_available():
+                            gpu_mem_before_prune = torch.cuda.memory_allocated() / 1024**3
+                            logger.debug(f"[{agent.name}] GPU memory before pruning: {gpu_mem_before_prune:.2f}GB")
+                        
+                        logger.info(f"[{agent.name}] Pruning low-quality paths using {self.pruning_strategy.__class__.__name__}")
+                        logger.debug(f"[{agent.name}] Pre-pruning path scores: {[f'{p.path_id}:{p.score:.4f}' for p in new_paths]}")
+                        
+                        # For Refiner, force keep_count=1 to ensure only 1 path for Judger
+                        if is_refiner:
+                            logger.info(f"[{agent.name}] Forcing pruning to keep exactly 1 path (Refiner strategy)")
+                            pruned_paths = self.pruning_strategy.prune(
+                                paths=new_paths,
+                                current_step=agent_idx,
+                                total_steps=len(self.agents),
+                                force_keep_count=1,  # Force Refiner to keep only 1 path
+                            )
+                        else:
+                            # Pass k parameter when using topk strategy
+                            prune_kwargs = {
+                                "paths": new_paths,
+                                "current_step": agent_idx,
+                                "total_steps": len(self.agents),
+                            }
+                            if isinstance(self.pruning_strategy, TopKPruning):
+                                prune_kwargs["k"] = self.topk_k
+                                logger.debug(f"[{agent.name}] Using topk pruning with k={self.topk_k}")
+                            pruned_paths = self.pruning_strategy.prune(**prune_kwargs)
+                        
+                        logger.info(f"[{agent.name}] Pruning complete: kept {len(pruned_paths)}/{len(new_paths)} paths")
+                        kept_paths_info = [(p.path_id, p.score) for p in pruned_paths]
+                        logger.info(f"[{agent.name}] Kept paths (sorted by score desc): "
+                                  f"{[f'Path{pid}={score:.4f}' for pid, score in kept_paths_info]}")
                     
                     # Merge similar paths if enabled
                     # Agent role-aware merge timing strategy:
@@ -658,12 +776,14 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     is_critic = (agent.role == "critic")
                     
                     # Determine if we should attempt merging for this agent
+                    # Skip merging if in PRM data collection mode
                     should_attempt_merge = (
                         self.enable_merging and 
                         len(pruned_paths) > 1 and 
                         not is_refiner and 
                         not is_planner and  # Skip Planner to preserve diversity
-                        is_critic  # Only merge at Critic stage
+                        is_critic and  # Only merge at Critic stage
+                        not (self.collect_prm_data and self._prm_disable_merging)  # Skip if PRM mode
                     )
                     
                     if should_attempt_merge:
@@ -904,7 +1024,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         # Select answer with highest weighted vote
                         best_answer = max(answer_votes.items(), key=lambda x: x[1])[0]
                         final_texts[batch_idx] = best_answer
-                        
+
                         logger.info(f"[{agent.name}] Selected final answer: {best_answer}")
                         logger.info(f"[{agent.name}] Winning vote weight: {answer_votes[best_answer]:.4f}")
                     
@@ -987,6 +1107,16 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                 "correct": ok,
                 "num_paths_used": len(batch_paths[idx]) if batch_paths[idx] else 0,
             })
+            
+            # PRM data collection: Finish collecting for this question
+            if self.collect_prm_data and self.prm_data_collector:
+                logger.info(f"[PRM DataCollection] Finishing data collection for item {idx + 1}")
+                logger.debug(f"[PRM DataCollection] Final answer: {pred}, Correct: {ok}")
+                self.prm_data_collector.finish_question(
+                    final_answer=pred if pred else "",
+                    is_correct=ok
+                )
+                logger.info(f"[PRM DataCollection] Data collection finished for item {idx + 1}")
         
         logger.info(f"Batch complete: accuracy={sum(r['correct'] for r in results)}/{len(results)}")
         
@@ -1376,12 +1506,14 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     is_critic = (agent.role == "critic")
                     
                     # Determine if we should attempt merging for this agent
+                    # Skip merging if in PRM data collection mode
                     should_attempt_merge = (
                         self.enable_merging and 
                         len(pruned_paths) > 1 and 
                         not is_refiner and 
                         not is_planner and  # Skip Planner to preserve diversity
-                        is_critic  # Only merge at Critic stage
+                        is_critic and  # Only merge at Critic stage
+                        not (self.collect_prm_data and self._prm_disable_merging)  # Skip if PRM mode
                     )
                     
                     if should_attempt_merge:

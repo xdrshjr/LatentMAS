@@ -46,6 +46,7 @@ python run.py \
   --enable_branching \
   --enable_merging \
   --pruning_strategy 'adaptive' \
+  --topk_k 3 \
   --merge_threshold 0.9 \
   --branch_threshold 0.5 \
   --latent_space_realign \

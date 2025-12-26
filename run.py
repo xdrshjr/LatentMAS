@@ -718,6 +718,16 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
                             help="Enable visualization graph generation (default: True)")
         parser.add_argument("--disable_visualization", dest="enable_visualization", action="store_false",
                             help="Disable visualization graph generation")
+        
+        # PRM training data collection
+        parser.add_argument("--collect_prm_data", action="store_true",
+                            help="Enable PRM training data collection mode")
+        parser.add_argument("--prm_output_dir", type=str, default="prm_data",
+                            help="Output directory for PRM training data (default: prm_data at project root)")
+        parser.add_argument("--prm_disable_pruning", action="store_true",
+                            help="Disable path pruning in PRM data collection mode (collect all paths)")
+        parser.add_argument("--prm_disable_merging", action="store_true",
+                            help="Disable path merging in PRM data collection mode (collect all paths)")
 
         args = parser.parse_args()
         
@@ -945,6 +955,22 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
             diversity_strategy=args.diversity_strategy,
             latent_consistency_metric=args.latent_consistency_metric,
         )
+        
+        # Enable PRM data collection if requested
+        if getattr(args, 'collect_prm_data', False):
+            logger.info("=" * 80)
+            logger.info("[PRM Data Collection] Enabling PRM training data collection mode")
+            logger.info("=" * 80)
+            method.enable_prm_data_collection(
+                output_dir=getattr(args, 'prm_output_dir', 'output/prm_data'),
+                disable_pruning=getattr(args, 'prm_disable_pruning', True),
+                disable_merging=getattr(args, 'prm_disable_merging', True)
+            )
+            logger.info(f"[PRM Data Collection] Output directory: {getattr(args, 'prm_output_dir', 'output/prm_data')}")
+            logger.info(f"[PRM Data Collection] Pruning disabled: {getattr(args, 'prm_disable_pruning', True)}")
+            logger.info(f"[PRM Data Collection] Merging disabled: {getattr(args, 'prm_disable_merging', True)}")
+            logger.info("=" * 80)
+    
     logger.info(f"Method {args.method} initialized successfully")
 
     # If custom questions provided, run on them directly
@@ -1155,6 +1181,111 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
     except Exception as e:
         logger.error(f"Failed to save results to CSV: {e}", exc_info=True)
         logger.debug(f"CSV save error: {type(e).__name__}: {str(e)}")
+    
+    # Save collected PRM training data if enabled
+    if getattr(args, 'collect_prm_data', False) and hasattr(method, 'prm_data_collector'):
+        logger.info("=" * 80)
+        logger.info("[PRM Data Collection] Saving collected PRM training data")
+        logger.info("=" * 80)
+        
+        try:
+            # Get collected data from the data collector
+            collected_data = method.prm_data_collector.get_collected_data()
+            logger.info(f"[PRM Data Collection] Retrieved {len(collected_data)} question records")
+            
+            if len(collected_data) == 0:
+                logger.warning("[PRM Data Collection] No data collected - nothing to save")
+            else:
+                # Get statistics
+                stats = method.prm_data_collector.get_statistics()
+                logger.info(f"[PRM Data Collection] Statistics:")
+                logger.info(f"  - Total questions: {stats.get('total_questions', 0)}")
+                logger.info(f"  - Total paths: {stats.get('total_paths', 0)}")
+                logger.info(f"  - Correct questions: {stats.get('correct_questions', 0)}")
+                logger.info(f"  - Accuracy: {stats.get('accuracy', 0.0):.4f}")
+                logger.info(f"  - Avg paths per question: {stats.get('avg_paths_per_question', 0.0):.2f}")
+                
+                # Build tree structures for each question
+                logger.info("[PRM Data Collection] Building tree structures for collected data")
+                tree_structures = []
+                for idx, question_record in enumerate(collected_data):
+                    logger.debug(f"[PRM Data Collection] Building tree for question {idx + 1}/{len(collected_data)}")
+                    logger.debug(f"[PRM Data Collection] Question has {len(question_record.paths)} paths")
+                    
+                    tree_structure = method.prm_tree_builder.build_tree(
+                        path_records=question_record.paths,
+                        is_correct=question_record.is_correct
+                    )
+                    tree_structures.append(tree_structure)
+                    
+                    # Log tree structure details
+                    num_nodes = tree_structure.get('num_nodes', 0)
+                    num_edges = tree_structure.get('num_edges', 0)
+                    max_depth = tree_structure.get('max_depth', 0)
+                    logger.debug(f"[PRM Data Collection] Tree built: {num_nodes} nodes, "
+                               f"{num_edges} edges, max_depth={max_depth}")
+                    
+                    if num_nodes == 0:
+                        logger.warning(f"[PRM Data Collection] Question {idx + 1} has no paths - tree is empty")
+                
+                logger.info(f"[PRM Data Collection] Built {len(tree_structures)} tree structures")
+                
+                # Save data using PRMDataStorage
+                logger.info("[PRM Data Collection] Saving data to disk")
+                output_dir = getattr(args, 'prm_output_dir', 'prm_data')
+                logger.info(f"[PRM Data Collection] Output directory: {output_dir}")
+                
+                # Create batch name based on task and timestamp
+                task_name = args.task if custom_questions is None else "custom"
+                batch_name = f"{task_name}_{args.method}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                logger.info(f"[PRM Data Collection] Batch name: {batch_name}")
+                
+                # Save batch data
+                saved_path = method.prm_data_storage.save_batch_data(
+                    question_records=collected_data,
+                    tree_structures=tree_structures,
+                    batch_name=batch_name
+                )
+                logger.info(f"[PRM Data Collection] Data saved to: {saved_path}")
+                
+                # Save metadata
+                metadata = {
+                    "task": task_name,
+                    "method": args.method,
+                    "model": args.model_name,
+                    "num_questions": len(collected_data),
+                    "num_paths_total": stats.get('total_paths', 0),
+                    "accuracy": stats.get('accuracy', 0.0),
+                    "timestamp": datetime.now().isoformat(),
+                    "batch_name": batch_name,
+                    "data_file": saved_path,
+                }
+                metadata_path = method.prm_data_storage.save_metadata(
+                    metadata=metadata,
+                    filename=f"{batch_name}_metadata.json"
+                )
+                logger.info(f"[PRM Data Collection] Metadata saved to: {metadata_path}")
+                
+                # Get storage statistics
+                storage_stats = method.prm_data_storage.get_statistics()
+                logger.info("[PRM Data Collection] Storage statistics:")
+                logger.info(f"  - Output directory: {storage_stats['output_dir']}")
+                logger.info(f"  - Number of files: {storage_stats['num_files']}")
+                logger.info(f"  - Total size: {storage_stats['total_size_mb']:.2f} MB")
+                
+                logger.info("=" * 80)
+                logger.info("[PRM Data Collection] PRM training data saved successfully!")
+                logger.info("=" * 80)
+                logger.info(f"Data location: {saved_path}")
+                logger.info(f"Metadata location: {metadata_path}")
+                logger.info(f"Total questions: {len(collected_data)}")
+                logger.info(f"Total paths: {stats.get('total_paths', 0)}")
+                logger.info("=" * 80)
+                
+        except Exception as e:
+            logger.error(f"[PRM Data Collection] Failed to save PRM data: {e}", exc_info=True)
+            logger.error(f"[PRM Data Collection] Error type: {type(e).__name__}")
+            logger.error(f"[PRM Data Collection] Error message: {str(e)}")
 
 
 
