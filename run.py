@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import sys
 from typing import Dict, List, Tuple, Optional
 import torch
 
@@ -1005,12 +1006,13 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
 
     # If custom questions provided, run on them directly
     if custom_questions is not None:
-        # Create progress bar for custom questions
-        progress_mgr.create_main_progress(
-            total=args.max_samples,
-            desc=f"Processing custom questions",
-            unit="question"
-        )
+        # Create progress bar for custom questions (only if not in multi-GPU worker mode)
+        if progress_mgr is not None:
+            progress_mgr.create_main_progress(
+                total=args.max_samples,
+                desc=f"Processing custom questions",
+                unit="question"
+            )
         preds = run_custom_questions(method, custom_questions, args, progress_mgr, output_file)
     else:
         # dataset loading
@@ -1064,12 +1066,13 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         processed = 0
         batch: List[Dict] = []
 
-        # Create progress bar
-        progress_mgr.create_main_progress(
-            total=args.max_samples,
-            desc=f"Processing {args.task}",
-            unit="sample"
-        )
+        # Create progress bar (only if not in multi-GPU worker mode)
+        if progress_mgr is not None:
+            progress_mgr.create_main_progress(
+                total=args.max_samples,
+                desc=f"Processing {args.task}",
+                unit="sample"
+            )
 
         for item in dataset_list:
             if processed >= args.max_samples:
