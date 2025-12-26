@@ -225,12 +225,163 @@ class LatentPRMDataCollector:
         logger.info(f"  - Total latent steps: {total_latent_steps}")
         logger.info(f"  - Answer correct: {is_correct}")
         
+        # Log detailed path information with traversal visualization
+        self._log_detailed_path_info()
+        
         # Add to question records
         self.question_records.append(self.current_question)
         
         # Clear current question
         self.current_question = None
         self.path_records.clear()
+    
+    def _build_path_traversal(self, path_id: int) -> List[int]:
+        """Build the full traversal path from root to the given path.
+        
+        Args:
+            path_id: ID of the target path
+            
+        Returns:
+            List of path IDs from root to target (inclusive)
+        """
+        traversal = []
+        current_id = path_id
+        
+        # Traverse backwards from target to root
+        visited = set()  # Prevent infinite loops
+        while current_id is not None and current_id not in visited:
+            visited.add(current_id)
+            traversal.insert(0, current_id)
+            
+            # Get parent
+            if current_id in self.path_records:
+                current_id = self.path_records[current_id].parent_path_id
+            else:
+                break
+        
+        return traversal
+    
+    def _format_path_traversal(self, path_id: int) -> str:
+        """Format a path traversal as a visual string.
+        
+        Args:
+            path_id: ID of the target path
+            
+        Returns:
+            Formatted string showing path traversal with agent info
+        """
+        traversal = self._build_path_traversal(path_id)
+        
+        if not traversal:
+            return f"path_{path_id} (isolated)"
+        
+        # Build formatted string with agent information
+        parts = []
+        for pid in traversal:
+            if pid in self.path_records:
+                path = self.path_records[pid]
+                parts.append(f"path_{pid}({path.agent_name})")
+            else:
+                parts.append(f"path_{pid}(unknown)")
+        
+        return " -> ".join(parts)
+    
+    def _log_detailed_path_info(self) -> None:
+        """Log detailed information about all collected paths with traversal visualization."""
+        if not self.path_records:
+            logger.info("[DataCollector] No paths collected for this question")
+            return
+        
+        logger.info("=" * 80)
+        logger.info("[DataCollector] DETAILED PATH COLLECTION REPORT")
+        logger.info("=" * 80)
+        
+        # Group paths by agent for organized display
+        paths_by_agent = {}
+        for path_id, path in self.path_records.items():
+            agent_key = f"{path.agent_name} (idx={path.agent_idx})"
+            if agent_key not in paths_by_agent:
+                paths_by_agent[agent_key] = []
+            paths_by_agent[agent_key].append(path)
+        
+        # Log paths organized by agent
+        for agent_key in sorted(paths_by_agent.keys()):
+            paths = paths_by_agent[agent_key]
+            logger.info(f"\n[Agent: {agent_key}]")
+            logger.info(f"  Paths generated: {len(paths)}")
+            
+            # Sort paths by score (descending)
+            sorted_paths = sorted(paths, key=lambda p: p.score, reverse=True)
+            
+            for i, path in enumerate(sorted_paths, 1):
+                # Build traversal visualization
+                traversal_str = self._format_path_traversal(path.path_id)
+                
+                # Log path details
+                logger.info(f"  [{i}] Path ID: {path.path_id}")
+                logger.info(f"      Traversal: {traversal_str}")
+                logger.info(f"      Score: {path.score:.4f}")
+                logger.info(f"      Latent steps: {len(path.latent_history)}")
+                logger.info(f"      Parent: {path.parent_path_id if path.parent_path_id is not None else 'None (root)'}")
+                logger.info(f"      Children: {len(path.child_path_ids)} paths")
+                
+                # Log PRM score with calculation details if available
+                if path.prm_score is not None:
+                    # Get child scores for calculation breakdown
+                    if path.child_path_ids:
+                        child_scores = []
+                        for child_id in path.child_path_ids:
+                            if child_id in self.path_records:
+                                child_path = self.path_records[child_id]
+                                if child_path.prm_score is not None:
+                                    child_scores.append(child_path.prm_score)
+                        
+                        if child_scores:
+                            sum_scores = sum(child_scores)
+                            num_children = len(child_scores)
+                            logger.info(f"      PRM Score: {path.prm_score:.4f} "
+                                      f"(calculated from {num_children} children: "
+                                      f"sum={sum_scores:.4f} / count={num_children})")
+                            logger.debug(f"      Child scores: {[f'{s:.4f}' for s in child_scores]}")
+                        else:
+                            logger.info(f"      PRM Score: {path.prm_score:.4f} (no scored children)")
+                    else:
+                        # Leaf node
+                        logger.info(f"      PRM Score: {path.prm_score:.4f} (leaf node)")
+        
+        # Log overall statistics
+        logger.info("\n" + "=" * 80)
+        logger.info("[DataCollector] COLLECTION SUMMARY")
+        logger.info("=" * 80)
+        
+        # Count root paths (no parent)
+        root_paths = [p for p in self.path_records.values() if p.parent_path_id is None]
+        leaf_paths = [p for p in self.path_records.values() if len(p.child_path_ids) == 0]
+        
+        # Calculate training data samples
+        # Each path with latent history contributes training samples
+        total_training_samples = sum(
+            len(p.latent_history) for p in self.path_records.values()
+        )
+        
+        logger.info(f"  Total paths collected: {len(self.path_records)}")
+        logger.info(f"  Root paths (no parent): {len(root_paths)}")
+        logger.info(f"  Leaf paths (no children): {len(leaf_paths)}")
+        logger.info(f"  Training data samples: {total_training_samples}")
+        logger.info(f"  Average score: {np.mean([p.score for p in self.path_records.values()]):.4f}")
+        logger.info(f"  Score range: [{min(p.score for p in self.path_records.values()):.4f}, "
+                   f"{max(p.score for p in self.path_records.values()):.4f}]")
+        
+        # Log score distribution by quartiles
+        scores = sorted([p.score for p in self.path_records.values()])
+        if len(scores) >= 4:
+            q1_idx = len(scores) // 4
+            q2_idx = len(scores) // 2
+            q3_idx = 3 * len(scores) // 4
+            logger.info(f"  Score quartiles: Q1={scores[q1_idx]:.4f}, "
+                       f"Q2={scores[q2_idx]:.4f}, Q3={scores[q3_idx]:.4f}")
+        
+        logger.info("=" * 80)
     
     def get_collected_data(self) -> List[QuestionRecord]:
         """Get all collected question records.

@@ -220,10 +220,15 @@ class PathTreeBuilder:
                         child_scores.append(nodes[child_id].prm_score)
                 
                 if child_scores:
+                    sum_scores = sum(child_scores)
+                    num_children = len(child_scores)
                     node.prm_score = np.mean(child_scores)
                     logger.debug(f"[PathTreeBuilder] Node {node.path_id} at depth {depth}: "
-                                f"prm_score={node.prm_score:.4f} "
-                                f"(avg of {len(child_scores)} children)")
+                               f"prm_score={node.prm_score:.4f} "
+                               f"(calculated from {num_children} children: "
+                               f"sum={sum_scores:.4f} / count={num_children})")
+                    logger.debug(f"[PathTreeBuilder] Node {node.path_id} child scores: "
+                                f"{[f'{s:.4f}' for s in child_scores]}")
                 else:
                     # No children with scores, assign neutral score
                     node.prm_score = 0.5

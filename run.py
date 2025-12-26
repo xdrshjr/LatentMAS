@@ -693,6 +693,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         
         # Multi-path specific arguments
         parser.add_argument("--num_paths", type=int, default=5, help="Number of parallel reasoning paths for latent_mas_multipath")
+        parser.add_argument("--num_parent_paths", type=int, default=5, help="Number of top-scoring parent paths to use for next agent (default: 5)")
         parser.add_argument("--enable_branching", action="store_true", help="Enable adaptive branching in multi-path reasoning")
         parser.add_argument("--enable_merging", action="store_true", help="Enable path merging in multi-path reasoning")
         parser.add_argument("--pruning_strategy", type=str, choices=["topk", "adaptive", "diversity", "budget"], default="adaptive",
@@ -804,6 +805,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
             # Create config from command-line arguments
             config_kwargs = {
                 'num_paths': args.num_paths,
+                'num_parent_paths': args.num_parent_paths,
                 'enable_branching': args.enable_branching,
                 'enable_merging': args.enable_merging,
                 'pruning_strategy': args.pruning_strategy,
@@ -830,6 +832,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         
         # Update args with final config values
         args.num_paths = multipath_config.num_paths
+        args.num_parent_paths = multipath_config.num_parent_paths
         args.enable_branching = multipath_config.enable_branching
         args.enable_merging = multipath_config.enable_merging
         args.pruning_strategy = multipath_config.pruning_strategy
@@ -847,6 +850,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
             args.enable_visualization = multipath_config.enable_visualization
         
         logger.info(f"[Configuration] Final multi-path config: num_paths={args.num_paths}, "
+                   f"num_parent_paths={args.num_parent_paths}, "
                    f"pruning={args.pruning_strategy}, diversity={args.diversity_strategy}, "
                    f"branching={args.enable_branching}, merging={args.enable_merging}, "
                    f"latent_consistency_metric={args.latent_consistency_metric}, "
@@ -946,6 +950,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
             generate_bs=args.generate_bs,
             args=args,
             num_paths=args.num_paths,
+            num_parent_paths=args.num_parent_paths,
             enable_branching=args.enable_branching,
             enable_merging=args.enable_merging,
             pruning_strategy=args.pruning_strategy,

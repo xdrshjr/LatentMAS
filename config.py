@@ -36,6 +36,7 @@ class MultiPathConfig:
     Attributes:
         # Core multi-path parameters
         num_paths: Number of parallel reasoning paths to maintain
+        num_parent_paths: Number of top-scoring parent paths to use for next agent
         enable_branching: Whether to use adaptive branching based on uncertainty
         enable_merging: Whether to merge similar paths for efficiency
         pruning_strategy: Strategy for pruning paths ("topk", "adaptive", "diversity", "budget")
@@ -75,6 +76,7 @@ class MultiPathConfig:
     
     # Core multi-path parameters
     num_paths: int = 5
+    num_parent_paths: int = 5
     enable_branching: bool = True
     enable_merging: bool = True
     pruning_strategy: str = "adaptive"
@@ -129,6 +131,13 @@ class MultiPathConfig:
             raise ValueError(f"num_paths must be >= 1, got {self.num_paths}")
         if self.num_paths > 100:
             logger.warning(f"[MultiPathConfig] num_paths={self.num_paths} is very large, may cause memory issues")
+        
+        # Validate num_parent_paths
+        if self.num_parent_paths < 1:
+            raise ValueError(f"num_parent_paths must be >= 1, got {self.num_parent_paths}")
+        if self.num_parent_paths > self.num_paths:
+            logger.warning(f"[MultiPathConfig] num_parent_paths ({self.num_parent_paths}) > num_paths ({self.num_paths}), "
+                         f"will be capped at num_paths")
         
         # Validate pruning_strategy
         valid_strategies = ["topk", "adaptive", "diversity", "budget"]
@@ -346,7 +355,7 @@ class ConfigLoader:
         
         # List of arguments that can override config
         override_params = [
-            'num_paths', 'enable_branching', 'enable_merging', 'pruning_strategy',
+            'num_paths', 'num_parent_paths', 'enable_branching', 'enable_merging', 'pruning_strategy',
             'merge_threshold', 'branch_threshold', 'diversity_strategy',
             'latent_consistency_metric',
             'latent_steps', 'temperature', 'top_p', 'max_new_tokens', 'generate_bs',

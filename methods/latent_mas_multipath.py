@@ -64,6 +64,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         args: argparse.Namespace = None,
         # Multi-path specific parameters
         num_paths: int = 5,
+        num_parent_paths: int = 5,
         enable_branching: bool = True,
         enable_merging: bool = True,
         pruning_strategy: str = "adaptive",
@@ -84,6 +85,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
             generate_bs: Batch size for generation
             args: Additional arguments namespace
             num_paths: Number of parallel paths (default: 5)
+            num_parent_paths: Number of top-scoring parent paths to use for next agent (default: 5)
             enable_branching: Enable adaptive branching (default: True)
             enable_merging: Enable path merging (default: True)
             pruning_strategy: Pruning strategy name (default: "adaptive")
@@ -107,6 +109,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         
         # Multi-path configuration
         self.num_paths = num_paths
+        self.num_parent_paths = num_parent_paths
         self.enable_branching = enable_branching
         self.enable_merging = enable_merging
         self.merge_threshold = merge_threshold
@@ -117,8 +120,9 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         # Override method name
         self.method_name = 'latent_mas_multipath'
         
-        logger.info(f"Initialized: num_paths={num_paths}, pruning={pruning_strategy}, "
-                   f"diversity={diversity_strategy}, branching={enable_branching}, merging={enable_merging}")
+        logger.info(f"Initialized: num_paths={num_paths}, num_parent_paths={num_parent_paths}, "
+                   f"pruning={pruning_strategy}, diversity={diversity_strategy}, "
+                   f"branching={enable_branching}, merging={enable_merging}")
         if pruning_strategy == "topk":
             logger.info(f"  - topk_k: {topk_k} (number of paths to keep when using topk pruning)")
         logger.debug(f"  - merge_threshold: {merge_threshold}")
@@ -532,94 +536,158 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     item_ids = wrapped_ids[batch_idx:batch_idx+1]
                     item_mask = wrapped_mask[batch_idx:batch_idx+1]
                     
-                    # Get past KV cache from previous paths (if any)
-                    past_kv = None
-                    parent_path_id = None
+                    # Select parent paths from previous agent (if any)
+                    parent_paths = []
                     if batch_paths[batch_idx]:
-                        # Use KV cache from the best path so far
-                        best_path = max(batch_paths[batch_idx], key=lambda p: p.score)
-                        past_kv = best_path.kv_cache
-                        parent_path_id = best_path.path_id  # Track parent for PRM data collection
-                        logger.debug(f"[LatentMASMultiPathMethod.run_batch] Using KV cache from path "
-                                   f"{best_path.path_id} (score: {best_path.score:.4f})")
+                        # Select top-k parent paths based on scores
+                        sorted_paths = sorted(batch_paths[batch_idx], key=lambda p: p.score, reverse=True)
+                        num_parents = min(self.num_parent_paths, len(sorted_paths))
+                        parent_paths = sorted_paths[:num_parents]
+                        
+                        logger.info(f"[{agent.name}] Selected {num_parents} parent paths from previous agent")
+                        logger.debug(f"[{agent.name}] Parent path IDs and scores: "
+                                   f"{[(p.path_id, f'{p.score:.4f}') for p in parent_paths]}")
+                    else:
+                        logger.debug(f"[{agent.name}] No parent paths available (first agent in chain)")
                     
                     # Determine if we should branch
                     should_branch = self._should_branch(
                         batch_paths[batch_idx],
                         agent_idx,
                         len(self.agents)
-                    )   # 当路径中的不确定性大于阈值的时候，需要创建一个分支
+                    )
                     
-                    if should_branch and past_kv is not None:
-                        # Branch from existing paths
-                        logger.info(f"[{agent.name}] Branching from existing paths (uncertainty triggered)")
-                        logger.debug(f"[{agent.name}] Creating {self.num_paths} branches with {self.latent_steps} steps each")
-                        path_dicts = self.model.generate_latent_with_branching(
-                            input_ids=item_ids,
-                            attention_mask=item_mask,
-                            num_branches=self.num_paths,
-                            latent_steps=self.latent_steps,
-                            diversity_strategy=self.diversity_strategy,
-                            past_key_values=past_kv,
-                        )
-                    else:
-                        # Generate new diverse paths
-                        if torch.cuda.is_available():
-                            gpu_mem_before_gen = torch.cuda.memory_allocated() / 1024**3
-                            logger.info(f"[{agent.name}] GPU memory before path generation: {gpu_mem_before_gen:.2f}GB")
-                        
-                        logger.debug(f"[{agent.name}] Generating {self.num_paths} diverse reasoning paths")
+                    # Generate paths distributed across parent paths
+                    if torch.cuda.is_available():
+                        gpu_mem_before_gen = torch.cuda.memory_allocated() / 1024**3
+                        logger.info(f"[{agent.name}] GPU memory before path generation: {gpu_mem_before_gen:.2f}GB")
+                    
+                    new_paths = []
+                    
+                    if not parent_paths:
+                        # First agent: generate all paths from scratch
+                        logger.info(f"[{agent.name}] Generating {self.num_paths} diverse reasoning paths (no parent)")
                         logger.debug(f"[{agent.name}] Each path will perform {self.latent_steps} latent thinking steps")
+                        
                         path_dicts = self.model.generate_diverse_latent_paths(
                             input_ids=item_ids,
                             attention_mask=item_mask,
                             num_paths=self.num_paths,
                             latent_steps=self.latent_steps,
                             diversity_strategy=self.diversity_strategy,
-                            past_key_values=past_kv,
-                        )   # 获取多样的推理路径，10条路径，每条路径有5个latent思考步骤， [10, 5]
+                            past_key_values=None,
+                        )
+                        
+                        # Convert to PathState objects
+                        for path_dict in path_dicts:
+                            path_id = self.path_manager.next_path_id
+                            self.path_manager.next_path_id += 1
+                            
+                            # Clean metadata
+                            clean_metadata = {}
+                            for k, v in path_dict.get('metadata', {}).items():
+                                if not isinstance(v, torch.Tensor):
+                                    clean_metadata[k] = v
+                            
+                            clean_metadata['agent_name'] = agent.name
+                            clean_metadata['agent_idx'] = agent_idx
+                            clean_metadata['batch_idx'] = batch_idx
+                            clean_metadata['parent_path_id'] = None
+                            
+                            path_state = PathState(
+                                path_id=path_id,
+                                latent_history=path_dict['latent_history'],
+                                hidden_states=path_dict['hidden_states'],
+                                kv_cache=path_dict['kv_cache'],
+                                metadata=clean_metadata,
+                            )
+                            new_paths.append(path_state)
+                            self.path_manager.paths[path_id] = path_state
+                            logger.debug(f"[{agent.name}] Created path {path_id} with parent=None")
+                        
+                        del path_dicts
+                    else:
+                        # Subsequent agents: distribute path generation across parent paths
+                        num_parents = len(parent_paths)
+                        paths_per_parent = self.num_paths // num_parents
+                        remaining_paths = self.num_paths % num_parents
+                        
+                        logger.info(f"[{agent.name}] Distributing {self.num_paths} paths across {num_parents} parents")
+                        logger.info(f"[{agent.name}] Base paths per parent: {paths_per_parent}, "
+                                   f"extra paths: {remaining_paths}")
+                        
+                        for parent_idx, parent_path in enumerate(parent_paths):
+                            # Calculate number of paths to generate from this parent
+                            num_paths_for_parent = paths_per_parent
+                            if parent_idx < remaining_paths:
+                                num_paths_for_parent += 1
+                            
+                            if num_paths_for_parent == 0:
+                                continue
+                            
+                            logger.info(f"[{agent.name}] Generating {num_paths_for_parent} paths from "
+                                       f"parent {parent_path.path_id} (score: {parent_path.score:.4f})")
+                            
+                            # Generate paths from this parent
+                            if should_branch and parent_path.kv_cache is not None:
+                                # Branch from existing path
+                                logger.debug(f"[{agent.name}] Branching from parent {parent_path.path_id}")
+                                path_dicts = self.model.generate_latent_with_branching(
+                                    input_ids=item_ids,
+                                    attention_mask=item_mask,
+                                    num_branches=num_paths_for_parent,
+                                    latent_steps=self.latent_steps,
+                                    diversity_strategy=self.diversity_strategy,
+                                    past_key_values=parent_path.kv_cache,
+                                )
+                            else:
+                                # Generate diverse paths from parent
+                                logger.debug(f"[{agent.name}] Generating diverse paths from parent {parent_path.path_id}")
+                                path_dicts = self.model.generate_diverse_latent_paths(
+                                    input_ids=item_ids,
+                                    attention_mask=item_mask,
+                                    num_paths=num_paths_for_parent,
+                                    latent_steps=self.latent_steps,
+                                    diversity_strategy=self.diversity_strategy,
+                                    past_key_values=parent_path.kv_cache,
+                                )
+                            
+                            # Convert to PathState objects with parent tracking
+                            for path_dict in path_dicts:
+                                path_id = self.path_manager.next_path_id
+                                self.path_manager.next_path_id += 1
+                                
+                                # Clean metadata
+                                clean_metadata = {}
+                                for k, v in path_dict.get('metadata', {}).items():
+                                    if not isinstance(v, torch.Tensor):
+                                        clean_metadata[k] = v
+                                
+                                clean_metadata['agent_name'] = agent.name
+                                clean_metadata['agent_idx'] = agent_idx
+                                clean_metadata['batch_idx'] = batch_idx
+                                clean_metadata['parent_path_id'] = parent_path.path_id
+                                
+                                path_state = PathState(
+                                    path_id=path_id,
+                                    latent_history=path_dict['latent_history'],
+                                    hidden_states=path_dict['hidden_states'],
+                                    kv_cache=path_dict['kv_cache'],
+                                    metadata=clean_metadata,
+                                )
+                                new_paths.append(path_state)
+                                self.path_manager.paths[path_id] = path_state
+                                logger.debug(f"[{agent.name}] Created path {path_id} with parent={parent_path.path_id}")
+                            
+                            del path_dicts
+                        
+                        logger.info(f"[{agent.name}] Generated total of {len(new_paths)} paths from {num_parents} parents")
                     
                     if torch.cuda.is_available():
                         gpu_mem_after_gen = torch.cuda.memory_allocated() / 1024**3
                         mem_increase = gpu_mem_after_gen - gpu_mem_before_gen
-                        logger.debug(f"[{agent.name}] GPU memory after path generation: {gpu_mem_after_gen:.2f}GB "
-                                   f"(+{mem_increase:.2f}GB for {self.num_paths} paths)")
-                    
-                    # Convert to PathState objects
-                    new_paths = []
-                    for path_dict in path_dicts:
-                        path_id = self.path_manager.next_path_id
-                        self.path_manager.next_path_id += 1
-                        
-                        # Clean metadata to avoid tensor references
-                        clean_metadata = {}
-                        for k, v in path_dict.get('metadata', {}).items():
-                            # Only store non-tensor metadata
-                            if not isinstance(v, torch.Tensor):
-                                clean_metadata[k] = v
-                        
-                        # Add agent information to metadata
-                        clean_metadata['agent_name'] = agent.name
-                        clean_metadata['agent_idx'] = agent_idx
-                        clean_metadata['batch_idx'] = batch_idx
-                        
-                        # Add parent path ID for PRM data collection
-                        if parent_path_id is not None:
-                            clean_metadata['parent_path_id'] = parent_path_id
-                        
-                        path_state = PathState(
-                            path_id=path_id,
-                            latent_history=path_dict['latent_history'],
-                            hidden_states=path_dict['hidden_states'],
-                            kv_cache=path_dict['kv_cache'],
-                            metadata=clean_metadata,
-                        )
-                        new_paths.append(path_state)
-                        self.path_manager.paths[path_id] = path_state
-                        logger.debug(f"[LatentMASMultiPathMethod.run_batch] Created path {path_id}")
-                    
-                    # Clean up path_dicts to free references
-                    del path_dicts
+                        logger.info(f"[{agent.name}] GPU memory after path generation: {gpu_mem_after_gen:.2f}GB "
+                                   f"(+{mem_increase:.2f}GB for {len(new_paths)} paths)")
                     
                     # Score all paths
                     if torch.cuda.is_available():

@@ -104,10 +104,15 @@ class PRMScorer:
                             child_scores.append(child_path.prm_score)
                 
                 if child_scores:
+                    sum_scores = sum(child_scores)
+                    num_children = len(child_scores)
                     path.prm_score = np.mean(child_scores)
                     logger.debug(f"[PRMScorer] Internal path {path.path_id} "
-                                f"(agent {agent_idx}): prm_score={path.prm_score:.4f} "
-                                f"(avg of {len(child_scores)} children)")
+                               f"(agent {agent_idx}): prm_score={path.prm_score:.4f} "
+                               f"(calculated from {num_children} children: "
+                               f"sum={sum_scores:.4f} / count={num_children})")
+                    logger.debug(f"[PRMScorer] Path {path.path_id} child scores: "
+                                f"{[f'{s:.4f}' for s in child_scores]}")
                 else:
                     # No children with scores, assign neutral score
                     path.prm_score = 0.5
