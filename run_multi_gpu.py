@@ -213,6 +213,10 @@ def build_subprocess_command(
         
         if base_args.prm_disable_merging:
             cmd.append("--prm_disable_merging")
+        
+        # Pass batch timestamp for coordinated naming
+        if base_args.prm_batch_timestamp:
+            cmd.extend(["--prm_batch_timestamp", base_args.prm_batch_timestamp])
     
     # Visualization
     if not base_args.enable_visualization:
@@ -449,6 +453,8 @@ def main():
                         help="Disable pruning in PRM data collection")
     parser.add_argument("--prm_disable_merging", action="store_true",
                         help="Disable merging in PRM data collection")
+    parser.add_argument("--prm_batch_timestamp", type=str, default=None,
+                        help="Timestamp for PRM batch naming (for multi-GPU coordination)")
     
     # Visualization
     parser.add_argument("--enable_visualization", action="store_true", default=False,
@@ -588,7 +594,12 @@ def main():
         logger.info("[Multi-GPU] Aggregating PRM data from all GPUs...")
         logger.info("=" * 80)
         
-        batch_name = f"{args.task}_{args.method}_{timestamp}"
+        # Use the same timestamp that was passed to workers
+        batch_timestamp = args.prm_batch_timestamp if args.prm_batch_timestamp else timestamp
+        batch_name = f"{args.task}_{args.method}_{batch_timestamp}"
+        
+        logger.info(f"[Multi-GPU] Batch name for aggregation: {batch_name}")
+        logger.info(f"[Multi-GPU] Looking for files: {batch_name}_gpu_*.pt")
         
         try:
             merged_file = aggregate_prm_data(

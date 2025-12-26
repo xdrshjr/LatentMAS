@@ -737,6 +737,8 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
                             help="Disable path pruning in PRM data collection mode (collect all paths)")
         parser.add_argument("--prm_disable_merging", action="store_true",
                             help="Disable path merging in PRM data collection mode (collect all paths)")
+        parser.add_argument("--prm_batch_timestamp", type=str, default=None,
+                            help="Timestamp for PRM batch naming (for multi-GPU coordination)")
         
         # Multi-GPU support (used internally by run_multi_gpu.py)
         parser.add_argument("--gpu_id", type=int, default=None,
@@ -1288,7 +1290,14 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
                 
                 # Create batch name based on task and timestamp
                 task_name = args.task if custom_questions is None else "custom"
-                timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+                
+                # Use provided timestamp for multi-GPU coordination, or generate new one
+                if hasattr(args, 'prm_batch_timestamp') and args.prm_batch_timestamp:
+                    timestamp_str = args.prm_batch_timestamp
+                    logger.info(f"[PRM Data Collection] Using coordinated timestamp: {timestamp_str}")
+                else:
+                    timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    logger.info(f"[PRM Data Collection] Generated new timestamp: {timestamp_str}")
                 
                 # Add output suffix for multi-GPU mode
                 if hasattr(args, 'output_suffix') and args.output_suffix:

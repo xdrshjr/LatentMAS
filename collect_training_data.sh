@@ -60,7 +60,7 @@ MODEL_NAME="/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapsh
 # ==================================Configuration==================================
 # Dataset configuration
 TASK="gsm8k"                    # Dataset to use (gsm8k, aime2024, etc.)
-MAX_SAMPLES=100                 # Number of questions to collect data for (-1 for all)
+MAX_SAMPLES=2                  # Number of questions to collect data for (-1 for all)
 SEED=42                         # Random seed for reproducibility
 
 # Model configuration
@@ -114,6 +114,11 @@ if [ "$ENABLE_MULTI_GPU" = true ]; then
     echo "Launching multi-GPU orchestrator..."
     echo ""
     
+    # Generate timestamp for coordinated batch naming
+    BATCH_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    echo "Batch timestamp: ${BATCH_TIMESTAMP}"
+    echo ""
+    
     # Launch multi-GPU orchestrator
     # Note: CUDA_VISIBLE_DEVICES is managed by the orchestrator for each subprocess
     python run_multi_gpu.py \
@@ -138,7 +143,8 @@ if [ "$ENABLE_MULTI_GPU" = true ]; then
       --collect_prm_data \
       --prm_output_dir ${OUTPUT_DIR} \
       --prm_disable_pruning \
-      --prm_disable_merging
+      --prm_disable_merging \
+      --prm_batch_timestamp ${BATCH_TIMESTAMP}
     
     EXECUTION_STATUS=$?
     
