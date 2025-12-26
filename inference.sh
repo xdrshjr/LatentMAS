@@ -30,17 +30,17 @@ MODEL_NAME="/autodl-fs/data/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899d
 
 # ==================================MultiPATH conservative latent reasoning==================================
 python run.py \
-  --method latent_mas_multipath \
+  --method latent_mas \
   --model_name ${MODEL_NAME} \
   --task gsm8k \
   --prompt sequential \
-  --max_samples 50 \
+  --max_samples -1 \
   --max_new_tokens 2048 \
   --seed 42 \
   --generate_bs 1 \
   --latent_steps 2 \
-  --num_paths 20 \
-  --diversity_strategy 'hybrid' \
+  --num_paths 10 \
+  --diversity_strategy 'temperature' \
   --temperature 0.5 \
   --top_p 0.95 \
   --enable_branching \

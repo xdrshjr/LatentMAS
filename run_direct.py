@@ -222,7 +222,7 @@ def main_direct(data_path: Optional[str] = None):
     parser.add_argument(
         "--data_path",
         type=str,
-        default="data/custom_questions.json",
+        default="data/custom_gsm8k_questions.json",
         help="Path to JSON file containing custom questions (default: data/custom_questions.json)"
     )
     
@@ -279,16 +279,16 @@ def main_direct(data_path: Optional[str] = None):
         # Core parameters
         "method": "latent_mas_multipath",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
         "model_name": "/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
-        "max_samples": len(custom_questions),  # Number of questions to process
+        "max_samples": 20,  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
         "prompt": "sequential",  # Options: "sequential", "hierarchical"
         "device": "cuda",  # Device to use
         "split": "test",  # Split name (not used in custom mode, but required)
         
         # Generation parameters
-        "max_new_tokens": 2048,  # Maximum tokens to generate
-        "latent_steps": 2,  # Number of latent steps (for latent_mas and latent_mas_multipath)
-        "temperature": 0.5,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
+        "max_new_tokens": 8192,  # Maximum tokens to generate
+        "latent_steps": 3,  # Number of latent steps (for latent_mas and latent_mas_multipath)
+        "temperature": 0.1,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
         "top_p": 0.95,  # Top-p sampling parameter
         "generate_bs": 1,  # Batch size for generation
         
@@ -298,10 +298,10 @@ def main_direct(data_path: Optional[str] = None):
         "latent_space_realign": True,  # Latent space realignment
         
         # Multi-path specific parameters (for latent_mas_multipath)
-        "num_paths": 20,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
+        "num_paths": 10,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
         "enable_branching": True,  # Enable adaptive branching based on uncertainty
         "enable_merging": True,  # Enable path merging for efficiency (reduces redundant computation)
-        "pruning_strategy": "adaptive",  # Options: "topk", "adaptive", "diversity", "budget"
+        "pruning_strategy": "topk",  # Options: "topk", "adaptive", "diversity", "budget"
                                          # - "topk": Keep top-k paths by score (simple, fast)
                                          # - "adaptive": Adjust pruning rate by progress (recommended)
                                          # - "diversity": Balance score and diversity (good for exploration)
@@ -310,7 +310,7 @@ def main_direct(data_path: Optional[str] = None):
                                  # Higher = only merge very similar paths, Lower = merge more aggressively
         "branch_threshold": 0.5,  # Uncertainty threshold for branching (0.0-1.0)
                                   # Higher = branch less often, Lower = branch more often
-        "diversity_strategy": "hybrid",  # Options: "temperature", "noise", "hybrid"
+        "diversity_strategy": "temperature",  # Options: "temperature", "noise", "hybrid"
                                         # - "temperature": Use different temperatures per path
                                         # - "noise": Add noise to hidden states
                                         # - "hybrid": Combine both strategies (recommended)

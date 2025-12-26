@@ -20,7 +20,7 @@ from methods.latent_mas import LatentMASMethod
 from methods.latent_mas_multipath import LatentMASMultiPathMethod
 from methods.text_mas import TextMASMethod
 from models import ModelWrapper
-from utils import auto_device, set_seed, create_output_file_path, save_question_answer_record, create_result_log_file_path
+from utils import auto_device, set_seed, create_output_file_path, save_question_answer_record, create_result_log_file_path, save_to_csv_results
 from config import ConfigLoader, MultiPathConfig, list_presets, get_preset_description
 from logging_config import setup_logging, create_log_file_path
 from progress_utils import get_progress_manager, reset_progress_manager
@@ -1067,6 +1067,89 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         total=len(preds),
         custom_questions=custom_questions
     )
+    
+    # Save results to CSV file
+    logger.info("=" * 80)
+    logger.info("Saving results to CSV file")
+    logger.info("=" * 80)
+    
+    try:
+        # Prepare run parameters dictionary
+        task_name = args.task if custom_questions is None else "custom"
+        run_params = {
+            # Core parameters
+            "method": args.method,
+            "model_name": args.model_name,
+            "task": task_name,
+            "split": args.split if custom_questions is None else "custom",
+            "max_samples": args.max_samples,
+            "seed": args.seed,
+            "device": args.device,
+            "prompt": getattr(args, 'prompt', 'sequential'),
+            
+            # Generation parameters
+            "max_new_tokens": args.max_new_tokens,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "generate_bs": args.generate_bs,
+            
+            # Method-specific parameters
+            "latent_steps": getattr(args, 'latent_steps', None),
+            "text_mas_context_length": getattr(args, 'text_mas_context_length', -1),
+            "think": getattr(args, 'think', False),
+            "latent_space_realign": getattr(args, 'latent_space_realign', False),
+            
+            # vLLM parameters
+            "use_vllm": getattr(args, 'use_vllm', False),
+            "enable_prefix_caching": getattr(args, 'enable_prefix_caching', False),
+            "use_second_HF_model": getattr(args, 'use_second_HF_model', False),
+            "device2": getattr(args, 'device2', None),
+            "tensor_parallel_size": getattr(args, 'tensor_parallel_size', 1),
+            "gpu_memory_utilization": getattr(args, 'gpu_memory_utilization', 0.9),
+            
+            # Multi-path specific parameters (if applicable)
+            "num_paths": getattr(args, 'num_paths', None),
+            "enable_branching": getattr(args, 'enable_branching', None),
+            "enable_merging": getattr(args, 'enable_merging', None),
+            "pruning_strategy": getattr(args, 'pruning_strategy', None),
+            "merge_threshold": getattr(args, 'merge_threshold', None),
+            "branch_threshold": getattr(args, 'branch_threshold', None),
+            "diversity_strategy": getattr(args, 'diversity_strategy', None),
+            "latent_consistency_metric": getattr(args, 'latent_consistency_metric', None),
+            
+            # Configuration file parameters
+            "config": getattr(args, 'config', None),
+            "config_preset": getattr(args, 'config_preset', None),
+            
+            # Visualization
+            "enable_visualization": getattr(args, 'enable_visualization', True),
+        }
+        
+        # Remove None values for cleaner output
+        run_params = {k: v for k, v in run_params.items() if v is not None}
+        
+        # Prepare results dictionary
+        results = {
+            "accuracy": acc,
+            "success_rate": acc,  # Same as accuracy
+            "correct": correct,
+            "total": len(preds),
+            "total_time_sec": round(total_time, 4),
+            "time_per_sample_sec": round(total_time / len(preds), 4) if len(preds) > 0 else 0.0,
+        }
+        
+        # Save to CSV
+        save_to_csv_results(
+            run_params=run_params,
+            results=results,
+            timestamp=datetime.now()
+        )
+        
+        logger.info("Results successfully saved to CSV file: output/csv_res/results.csv")
+        
+    except Exception as e:
+        logger.error(f"Failed to save results to CSV: {e}", exc_info=True)
+        logger.debug(f"CSV save error: {type(e).__name__}: {str(e)}")
 
 
 

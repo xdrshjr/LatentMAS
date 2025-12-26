@@ -5,6 +5,7 @@ import time
 import functools
 import logging
 import json
+import csv
 from typing import Optional, Callable, Any, Dict
 from collections import defaultdict
 from pathlib import Path
@@ -572,4 +573,161 @@ def save_question_answer_record(
         
     except Exception as e:
         output_logger.error(f"[Output] Failed to save record for problem #{problem_idx}: {e}", exc_info=True)
+
+
+def save_to_csv_results(
+    run_params: Dict[str, Any],
+    results: Dict[str, Any],
+    timestamp: datetime
+) -> None:
+    """Save run parameters and results to a CSV file.
+    
+    This function records the complete run summary including all parameters
+    and final results (accuracy, success rate, etc.) to a CSV file for
+    later analysis and comparison across runs.
+    
+    The CSV file is stored in output/csv_res/results.csv and will be created
+    if it doesn't exist, or appended to if it already exists.
+    
+    Args:
+        run_params: Dictionary containing all run parameters (method, model, task, etc.)
+        results: Dictionary containing final results (accuracy, correct count, timing, etc.)
+        timestamp: Timestamp of the run
+    """
+    logger = logging.getLogger(__name__ + ".csv")
+    
+    try:
+        # Create output directory
+        csv_dir = Path('output') / 'csv_res'
+        csv_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"[CSV] Ensured CSV directory exists: {csv_dir}")
+        
+        # CSV file path
+        csv_file = csv_dir / 'results.csv'
+        file_exists = csv_file.exists()
+        
+        if file_exists:
+            logger.info(f"[CSV] CSV file exists, will append to: {csv_file}")
+        else:
+            logger.info(f"[CSV] CSV file does not exist, will create new: {csv_file}")
+        
+        # Prepare row data
+        # Core fields that should always be present
+        row_data = {
+            # Timestamp fields
+            'timestamp': timestamp.isoformat(),
+            'run_date': timestamp.strftime('%Y-%m-%d'),
+            'run_time': timestamp.strftime('%H:%M:%S'),
+            
+            # Task and method info
+            'task': run_params.get('task', 'unknown'),
+            'method': run_params.get('method', 'unknown'),
+            'model_name': run_params.get('model_name', 'unknown'),
+            
+            # Results
+            'accuracy': results.get('accuracy', 0.0),
+            'success_rate': results.get('success_rate', 0.0),
+            'correct': results.get('correct', 0),
+            'total': results.get('total', 0),
+            'total_time_sec': results.get('total_time_sec', 0.0),
+            'time_per_sample_sec': results.get('time_per_sample_sec', 0.0),
+            
+            # Core parameters
+            'max_samples': run_params.get('max_samples', 0),
+            'seed': run_params.get('seed', 42),
+            'device': run_params.get('device', 'cuda'),
+            'prompt': run_params.get('prompt', 'sequential'),
+            'split': run_params.get('split', 'test'),
+            
+            # Generation parameters
+            'max_new_tokens': run_params.get('max_new_tokens', 4096),
+            'temperature': run_params.get('temperature', 0.7),
+            'top_p': run_params.get('top_p', 0.95),
+            'generate_bs': run_params.get('generate_bs', 1),
+            
+            # Method-specific parameters
+            'latent_steps': run_params.get('latent_steps', None),
+            'text_mas_context_length': run_params.get('text_mas_context_length', None),
+            'think': run_params.get('think', False),
+            'latent_space_realign': run_params.get('latent_space_realign', False),
+            
+            # vLLM parameters
+            'use_vllm': run_params.get('use_vllm', False),
+            'enable_prefix_caching': run_params.get('enable_prefix_caching', False),
+            'use_second_HF_model': run_params.get('use_second_HF_model', False),
+            'tensor_parallel_size': run_params.get('tensor_parallel_size', 1),
+            'gpu_memory_utilization': run_params.get('gpu_memory_utilization', 0.9),
+            
+            # Multi-path specific parameters
+            'num_paths': run_params.get('num_paths', None),
+            'enable_branching': run_params.get('enable_branching', None),
+            'enable_merging': run_params.get('enable_merging', None),
+            'pruning_strategy': run_params.get('pruning_strategy', None),
+            'merge_threshold': run_params.get('merge_threshold', None),
+            'branch_threshold': run_params.get('branch_threshold', None),
+            'diversity_strategy': run_params.get('diversity_strategy', None),
+            'latent_consistency_metric': run_params.get('latent_consistency_metric', None),
+            
+            # Configuration
+            'config': run_params.get('config', None),
+            'config_preset': run_params.get('config_preset', None),
+            'enable_visualization': run_params.get('enable_visualization', True),
+            
+            # Command parameters as JSON string for full record
+            'command_params_json': json.dumps(run_params, ensure_ascii=False),
+        }
+        
+        logger.debug(f"[CSV] Prepared row data with {len(row_data)} fields")
+        
+        # Define field order for CSV header
+        fieldnames = [
+            # Timestamp
+            'timestamp', 'run_date', 'run_time',
+            # Task and method
+            'task', 'method', 'model_name',
+            # Results
+            'accuracy', 'success_rate', 'correct', 'total',
+            'total_time_sec', 'time_per_sample_sec',
+            # Core parameters
+            'max_samples', 'seed', 'device', 'prompt', 'split',
+            # Generation parameters
+            'max_new_tokens', 'temperature', 'top_p', 'generate_bs',
+            # Method-specific
+            'latent_steps', 'text_mas_context_length', 'think', 'latent_space_realign',
+            # vLLM
+            'use_vllm', 'enable_prefix_caching', 'use_second_HF_model',
+            'tensor_parallel_size', 'gpu_memory_utilization',
+            # Multi-path
+            'num_paths', 'enable_branching', 'enable_merging',
+            'pruning_strategy', 'merge_threshold', 'branch_threshold',
+            'diversity_strategy', 'latent_consistency_metric',
+            # Configuration
+            'config', 'config_preset', 'enable_visualization',
+            # Full JSON record
+            'command_params_json',
+        ]
+        
+        logger.debug(f"[CSV] Using {len(fieldnames)} fields for CSV header")
+        
+        # Write to CSV
+        with open(csv_file, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+            
+            # Write header only if file is new
+            if not file_exists:
+                writer.writeheader()
+                logger.info("[CSV] Wrote CSV header to new file")
+            
+            # Write data row
+            writer.writerow(row_data)
+            logger.info("[CSV] Wrote data row to CSV file")
+        
+        logger.info(f"[CSV] Successfully saved results to CSV: {csv_file}")
+        logger.info(f"[CSV] Summary: {results.get('accuracy', 0.0):.4f} accuracy, "
+                   f"{results.get('correct', 0)}/{results.get('total', 0)} correct, "
+                   f"{results.get('total_time_sec', 0.0):.2f}s total time")
+        
+    except Exception as e:
+        logger.error(f"[CSV] Failed to save results to CSV: {e}", exc_info=True)
+        logger.debug(f"[CSV] Error details: {type(e).__name__}: {str(e)}")
 
