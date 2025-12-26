@@ -32,7 +32,7 @@ MODEL_NAME="/autodl-fs/data/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899d
 # ==================================Configuration==================================
 # Dataset configuration
 TASK="gsm8k"                    # Dataset to use (gsm8k, aime2024, etc.)
-MAX_SAMPLES=2                 # Number of questions to collect data for (-1 for all)
+MAX_SAMPLES=10                 # Number of questions to collect data for (-1 for all)
 SEED=42                         # Random seed for reproducibility
 
 # Model configuration
