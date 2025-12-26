@@ -731,3 +731,365 @@ def save_to_csv_results(
         logger.error(f"[CSV] Failed to save results to CSV: {e}", exc_info=True)
         logger.debug(f"[CSV] Error details: {type(e).__name__}: {str(e)}")
 
+
+# ============================================================================
+# Multi-GPU Data Distribution Utilities
+# ============================================================================
+
+multi_gpu_logger = logging.getLogger(__name__ + ".multi_gpu")
+
+
+def split_dataset_for_multi_gpu(
+    dataset: list,
+    num_gpus: int,
+    gpu_id: int
+) -> list:
+    """Split dataset for multi-GPU parallel processing.
+    
+    This function divides the dataset evenly across multiple GPUs, ensuring
+    each GPU processes a distinct subset of the data. The split is deterministic
+    based on GPU ID.
+    
+    Args:
+        dataset: Complete dataset as a list
+        num_gpus: Total number of GPUs to distribute across
+        gpu_id: Current GPU ID (0-indexed)
+        
+    Returns:
+        Subset of dataset assigned to this GPU
+        
+    Example:
+        # 100 samples, 4 GPUs
+        # GPU 0: samples 0-24 (25 samples)
+        # GPU 1: samples 25-49 (25 samples)
+        # GPU 2: samples 50-74 (25 samples)
+        # GPU 3: samples 75-99 (25 samples)
+    """
+    if num_gpus <= 0:
+        raise ValueError(f"num_gpus must be positive, got {num_gpus}")
+    
+    if gpu_id < 0 or gpu_id >= num_gpus:
+        raise ValueError(f"gpu_id must be in range [0, {num_gpus-1}], got {gpu_id}")
+    
+    total_samples = len(dataset)
+    
+    if total_samples == 0:
+        multi_gpu_logger.warning("[Multi-GPU] Empty dataset provided")
+        return []
+    
+    # Calculate start and end indices for this GPU
+    start_idx, end_idx = get_gpu_data_range(total_samples, num_gpus, gpu_id)
+    
+    # Extract subset
+    gpu_dataset = dataset[start_idx:end_idx]
+    
+    multi_gpu_logger.info(
+        f"[Multi-GPU] GPU {gpu_id}/{num_gpus-1}: Assigned samples [{start_idx}:{end_idx}] "
+        f"({len(gpu_dataset)} samples out of {total_samples} total)"
+    )
+    multi_gpu_logger.debug(
+        f"[Multi-GPU] GPU {gpu_id} data range: start={start_idx}, end={end_idx}, "
+        f"count={len(gpu_dataset)}"
+    )
+    
+    return gpu_dataset
+
+
+def get_gpu_data_range(
+    total_samples: int,
+    num_gpus: int,
+    gpu_id: int
+) -> tuple:
+    """Calculate the data range (start, end) for a specific GPU.
+    
+    This function computes the start and end indices for data distribution
+    across multiple GPUs. It ensures balanced distribution with any remainder
+    samples distributed to the first few GPUs.
+    
+    Args:
+        total_samples: Total number of samples in the dataset
+        num_gpus: Total number of GPUs
+        gpu_id: Current GPU ID (0-indexed)
+        
+    Returns:
+        Tuple of (start_index, end_index) for this GPU
+        
+    Example:
+        >>> get_gpu_data_range(100, 4, 0)
+        (0, 25)
+        >>> get_gpu_data_range(100, 4, 3)
+        (75, 100)
+        >>> get_gpu_data_range(101, 4, 0)  # Uneven split
+        (0, 26)  # First GPU gets extra sample
+    """
+    if num_gpus <= 0:
+        raise ValueError(f"num_gpus must be positive, got {num_gpus}")
+    
+    if gpu_id < 0 or gpu_id >= num_gpus:
+        raise ValueError(f"gpu_id must be in range [0, {num_gpus-1}], got {gpu_id}")
+    
+    if total_samples <= 0:
+        multi_gpu_logger.warning(
+            f"[Multi-GPU] total_samples is {total_samples}, returning empty range"
+        )
+        return (0, 0)
+    
+    # Calculate base samples per GPU and remainder
+    samples_per_gpu = total_samples // num_gpus
+    remainder = total_samples % num_gpus
+    
+    # Distribute remainder to first few GPUs
+    # GPUs 0 to (remainder-1) get one extra sample
+    if gpu_id < remainder:
+        start_idx = gpu_id * (samples_per_gpu + 1)
+        end_idx = start_idx + samples_per_gpu + 1
+    else:
+        start_idx = remainder * (samples_per_gpu + 1) + (gpu_id - remainder) * samples_per_gpu
+        end_idx = start_idx + samples_per_gpu
+    
+    multi_gpu_logger.debug(
+        f"[Multi-GPU] Range calculation: total={total_samples}, num_gpus={num_gpus}, "
+        f"gpu_id={gpu_id}, base_per_gpu={samples_per_gpu}, remainder={remainder}, "
+        f"result=[{start_idx}:{end_idx}]"
+    )
+    
+    return (start_idx, end_idx)
+
+
+def validate_gpu_availability(gpu_ids: list) -> bool:
+    """Validate that specified GPUs are available.
+    
+    Args:
+        gpu_ids: List of GPU IDs to validate
+        
+    Returns:
+        True if all GPUs are available, False otherwise
+    """
+    if not torch.cuda.is_available():
+        multi_gpu_logger.error("[Multi-GPU] CUDA is not available on this system")
+        return False
+    
+    num_available_gpus = torch.cuda.device_count()
+    multi_gpu_logger.info(f"[Multi-GPU] System has {num_available_gpus} CUDA devices available")
+    
+    for gpu_id in gpu_ids:
+        if gpu_id < 0 or gpu_id >= num_available_gpus:
+            multi_gpu_logger.error(
+                f"[Multi-GPU] GPU {gpu_id} is not available. "
+                f"Valid range: [0, {num_available_gpus-1}]"
+            )
+            return False
+        
+        # Try to access the GPU
+        try:
+            device = torch.device(f'cuda:{gpu_id}')
+            _ = torch.zeros(1, device=device)
+            multi_gpu_logger.debug(f"[Multi-GPU] GPU {gpu_id} is accessible")
+        except Exception as e:
+            multi_gpu_logger.error(
+                f"[Multi-GPU] Failed to access GPU {gpu_id}: {e}"
+            )
+            return False
+    
+    multi_gpu_logger.info(f"[Multi-GPU] All specified GPUs {gpu_ids} are available and accessible")
+    return True
+
+
+# ============================================================================
+# Multi-GPU Result Aggregation Utilities
+# ============================================================================
+
+def aggregate_prm_data(
+    output_dir: str,
+    num_gpus: int,
+    batch_name: str
+) -> Optional[str]:
+    """Aggregate PRM training data collected from multiple GPUs.
+    
+    This function merges data files from multiple GPU processes into a single
+    unified dataset. It combines question records, tree structures, and metadata.
+    
+    Args:
+        output_dir: Directory containing GPU-specific data files
+        num_gpus: Number of GPUs that collected data
+        batch_name: Base name for the batch (without GPU suffix)
+        
+    Returns:
+        Path to the merged data file, or None if aggregation failed
+    """
+    multi_gpu_logger.info("=" * 80)
+    multi_gpu_logger.info("[Multi-GPU Aggregation] Starting PRM data aggregation")
+    multi_gpu_logger.info("=" * 80)
+    multi_gpu_logger.info(f"[Multi-GPU Aggregation] Output directory: {output_dir}")
+    multi_gpu_logger.info(f"[Multi-GPU Aggregation] Number of GPUs: {num_gpus}")
+    multi_gpu_logger.info(f"[Multi-GPU Aggregation] Batch name: {batch_name}")
+    
+    output_path = Path(output_dir)
+    if not output_path.exists():
+        multi_gpu_logger.error(f"[Multi-GPU Aggregation] Output directory does not exist: {output_dir}")
+        return None
+    
+    # Collect all GPU data files
+    all_question_records = []
+    all_tree_structures = []
+    gpu_metadata_list = []
+    
+    for gpu_id in range(num_gpus):
+        gpu_batch_name = f"{batch_name}_gpu_{gpu_id}"
+        data_file = output_path / f"{gpu_batch_name}.pt"
+        metadata_file = output_path / f"{gpu_batch_name}_metadata.json"
+        
+        multi_gpu_logger.info(f"[Multi-GPU Aggregation] Processing GPU {gpu_id} data...")
+        multi_gpu_logger.debug(f"[Multi-GPU Aggregation] Looking for data file: {data_file}")
+        
+        # Load data file
+        if not data_file.exists():
+            multi_gpu_logger.warning(
+                f"[Multi-GPU Aggregation] Data file not found for GPU {gpu_id}: {data_file}"
+            )
+            continue
+        
+        try:
+            gpu_data = torch.load(data_file, map_location='cpu')
+            question_records = gpu_data.get('question_records', [])
+            tree_structures = gpu_data.get('tree_structures', [])
+            
+            all_question_records.extend(question_records)
+            all_tree_structures.extend(tree_structures)
+            
+            multi_gpu_logger.info(
+                f"[Multi-GPU Aggregation] GPU {gpu_id}: Loaded {len(question_records)} questions, "
+                f"{len(tree_structures)} trees"
+            )
+            multi_gpu_logger.debug(
+                f"[Multi-GPU Aggregation] GPU {gpu_id} data keys: {list(gpu_data.keys())}"
+            )
+            
+        except Exception as e:
+            multi_gpu_logger.error(
+                f"[Multi-GPU Aggregation] Failed to load data from GPU {gpu_id}: {e}",
+                exc_info=True
+            )
+            continue
+        
+        # Load metadata file
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
+                    gpu_metadata = json.load(f)
+                    gpu_metadata_list.append(gpu_metadata)
+                    multi_gpu_logger.debug(
+                        f"[Multi-GPU Aggregation] GPU {gpu_id} metadata: "
+                        f"{gpu_metadata.get('num_questions', 0)} questions, "
+                        f"accuracy={gpu_metadata.get('accuracy', 0.0):.4f}"
+                    )
+            except Exception as e:
+                multi_gpu_logger.warning(
+                    f"[Multi-GPU Aggregation] Failed to load metadata from GPU {gpu_id}: {e}"
+                )
+    
+    # Check if we have any data
+    if not all_question_records:
+        multi_gpu_logger.error("[Multi-GPU Aggregation] No data collected from any GPU")
+        return None
+    
+    multi_gpu_logger.info(
+        f"[Multi-GPU Aggregation] Aggregated {len(all_question_records)} total questions "
+        f"from {len(gpu_metadata_list)} GPUs"
+    )
+    
+    # Merge metadata
+    merged_metadata = merge_prm_metadata(gpu_metadata_list, batch_name)
+    
+    # Save merged data
+    merged_batch_name = f"{batch_name}_merged"
+    merged_data_file = output_path / f"{merged_batch_name}.pt"
+    merged_metadata_file = output_path / f"{merged_batch_name}_metadata.json"
+    
+    try:
+        # Save merged data
+        multi_gpu_logger.info(f"[Multi-GPU Aggregation] Saving merged data to: {merged_data_file}")
+        torch.save({
+            'question_records': all_question_records,
+            'tree_structures': all_tree_structures,
+        }, merged_data_file)
+        
+        # Save merged metadata
+        multi_gpu_logger.info(f"[Multi-GPU Aggregation] Saving merged metadata to: {merged_metadata_file}")
+        with open(merged_metadata_file, 'w', encoding='utf-8') as f:
+            json.dump(merged_metadata, f, indent=2, ensure_ascii=False)
+        
+        multi_gpu_logger.info("=" * 80)
+        multi_gpu_logger.info("[Multi-GPU Aggregation] Aggregation completed successfully!")
+        multi_gpu_logger.info("=" * 80)
+        multi_gpu_logger.info(f"[Multi-GPU Aggregation] Merged data file: {merged_data_file}")
+        multi_gpu_logger.info(f"[Multi-GPU Aggregation] Merged metadata file: {merged_metadata_file}")
+        multi_gpu_logger.info(f"[Multi-GPU Aggregation] Total questions: {len(all_question_records)}")
+        multi_gpu_logger.info(f"[Multi-GPU Aggregation] Total trees: {len(all_tree_structures)}")
+        multi_gpu_logger.info(f"[Multi-GPU Aggregation] Total paths: {merged_metadata.get('num_paths_total', 0)}")
+        multi_gpu_logger.info(f"[Multi-GPU Aggregation] Overall accuracy: {merged_metadata.get('accuracy', 0.0):.4f}")
+        multi_gpu_logger.info("=" * 80)
+        
+        return str(merged_data_file)
+        
+    except Exception as e:
+        multi_gpu_logger.error(
+            f"[Multi-GPU Aggregation] Failed to save merged data: {e}",
+            exc_info=True
+        )
+        return None
+
+
+def merge_prm_metadata(
+    metadata_list: list,
+    batch_name: str
+) -> dict:
+    """Merge metadata from multiple GPU processes.
+    
+    Args:
+        metadata_list: List of metadata dictionaries from each GPU
+        batch_name: Name for the merged batch
+        
+    Returns:
+        Merged metadata dictionary
+    """
+    if not metadata_list:
+        multi_gpu_logger.warning("[Multi-GPU Aggregation] No metadata to merge")
+        return {}
+    
+    multi_gpu_logger.info(f"[Multi-GPU Aggregation] Merging metadata from {len(metadata_list)} GPUs")
+    
+    # Aggregate statistics
+    total_questions = sum(m.get('num_questions', 0) for m in metadata_list)
+    total_paths = sum(m.get('num_paths_total', 0) for m in metadata_list)
+    correct_questions = sum(
+        int(m.get('num_questions', 0) * m.get('accuracy', 0.0))
+        for m in metadata_list
+    )
+    
+    overall_accuracy = correct_questions / total_questions if total_questions > 0 else 0.0
+    
+    # Get common fields from first metadata
+    first_metadata = metadata_list[0]
+    
+    merged_metadata = {
+        'task': first_metadata.get('task', 'unknown'),
+        'method': first_metadata.get('method', 'unknown'),
+        'model': first_metadata.get('model', 'unknown'),
+        'num_questions': total_questions,
+        'num_paths_total': total_paths,
+        'accuracy': overall_accuracy,
+        'timestamp': datetime.now().isoformat(),
+        'batch_name': batch_name + '_merged',
+        'num_gpus': len(metadata_list),
+        'gpu_metadata': metadata_list,  # Keep individual GPU metadata for reference
+    }
+    
+    multi_gpu_logger.info(
+        f"[Multi-GPU Aggregation] Merged metadata: {total_questions} questions, "
+        f"{total_paths} paths, accuracy={overall_accuracy:.4f}"
+    )
+    multi_gpu_logger.debug(f"[Multi-GPU Aggregation] Merged metadata keys: {list(merged_metadata.keys())}")
+    
+    return merged_metadata
+

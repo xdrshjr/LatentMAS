@@ -443,6 +443,13 @@ def process_batch(
         acc = correct / len(preds) if len(preds) > 0 else 0.0
         progress_mgr.update_main_progress(len(results))
         progress_mgr.set_main_postfix(acc=f"{acc:.2%}", correct=f"{correct}/{len(preds)}")
+    else:
+        # Multi-GPU worker mode: output progress marker for orchestrator to parse
+        correct = sum(1 for p in preds if p.get("correct", False))
+        acc = correct / len(preds) if len(preds) > 0 else 0.0
+        # Output to stderr with special marker format
+        sys.stderr.write(f"[PROGRESS:{processed}/{max_samples}|acc:{acc:.4f}|correct:{correct}/{len(preds)}]\n")
+        sys.stderr.flush()
     
     logger.debug(f"Batch processing complete. Total processed: {processed}")
     return processed, preds
@@ -729,6 +736,14 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
                             help="Disable path pruning in PRM data collection mode (collect all paths)")
         parser.add_argument("--prm_disable_merging", action="store_true",
                             help="Disable path merging in PRM data collection mode (collect all paths)")
+        
+        # Multi-GPU support (used internally by run_multi_gpu.py)
+        parser.add_argument("--gpu_id", type=int, default=None,
+                            help="GPU ID for this process (used in multi-GPU mode)")
+        parser.add_argument("--data_start_idx", type=int, default=0,
+                            help="Starting index in dataset for this GPU (used in multi-GPU mode)")
+        parser.add_argument("--output_suffix", type=str, default=None,
+                            help="Suffix for output files (e.g., 'gpu_0' for multi-GPU mode)")
 
         args = parser.parse_args()
         
@@ -775,8 +790,18 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
     logger.info(f"Question-answer records will be saved to: {output_file}")
     
     # Initialize progress bar manager
-    reset_progress_manager()
-    progress_mgr = get_progress_manager()
+    # In multi-GPU mode (when gpu_id is set), disable tqdm progress bars
+    # and output simple progress markers instead
+    is_multi_gpu_worker = hasattr(args, 'gpu_id') and args.gpu_id is not None
+    
+    if is_multi_gpu_worker:
+        # Multi-GPU worker: disable progress bars, use simple progress output
+        progress_mgr = None
+        logger.info(f"[Multi-GPU Worker] Running as GPU {args.gpu_id} worker - progress bars disabled")
+    else:
+        # Single GPU or orchestrator: use normal progress bars
+        reset_progress_manager()
+        progress_mgr = get_progress_manager()
     
     # Load configuration if using latent_mas_multipath
     multipath_config = None
@@ -1011,12 +1036,29 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         else:
             raise ValueError(f'no {args.task} support')
 
-        if args.max_samples == -1:
-            dataset_iter = list(dataset_iter)  
-            args.max_samples = len(dataset_iter)
-            logger.info(f"Loaded all {args.max_samples} samples from dataset")
+        # Convert iterator to list for slicing support
+        dataset_list = list(dataset_iter)
+        total_dataset_size = len(dataset_list)
+        logger.info(f"Loaded dataset with {total_dataset_size} total samples")
+        
+        # Handle multi-GPU data slicing
+        if hasattr(args, 'data_start_idx') and args.data_start_idx > 0:
+            logger.info(f"[Multi-GPU] This GPU will start from index {args.data_start_idx}")
+            logger.info(f"[Multi-GPU] This GPU will process {args.max_samples} samples")
+            
+            # Slice dataset for this GPU
+            end_idx = args.data_start_idx + args.max_samples
+            dataset_list = dataset_list[args.data_start_idx:end_idx]
+            
+            logger.info(f"[Multi-GPU] Sliced dataset: [{args.data_start_idx}:{end_idx}] ({len(dataset_list)} samples)")
         else:
-            logger.info(f"Will process up to {args.max_samples} samples")
+            # Single GPU mode
+            if args.max_samples == -1:
+                args.max_samples = total_dataset_size
+                logger.info(f"Will process all {args.max_samples} samples from dataset")
+            else:
+                dataset_list = dataset_list[:args.max_samples]
+                logger.info(f"Will process {args.max_samples} samples from dataset")
 
         preds: List[Dict] = []
         processed = 0
@@ -1029,7 +1071,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
             unit="sample"
         )
 
-        for item in dataset_iter:
+        for item in dataset_list:
             if processed >= args.max_samples:
                 break
             batch.append(item)
@@ -1062,7 +1104,8 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         logger.info(f"Completed processing {len(preds)} samples from dataset")
     
     # Close progress bar
-    progress_mgr.close_all()
+    if progress_mgr is not None:
+        progress_mgr.close_all()
     
     total_time = time.time() - start_time
     logger.info(f"Total processing time: {total_time:.2f} seconds")
@@ -1242,7 +1285,15 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
                 
                 # Create batch name based on task and timestamp
                 task_name = args.task if custom_questions is None else "custom"
-                batch_name = f"{task_name}_{args.method}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+                
+                # Add output suffix for multi-GPU mode
+                if hasattr(args, 'output_suffix') and args.output_suffix:
+                    batch_name = f"{task_name}_{args.method}_{timestamp_str}_{args.output_suffix}"
+                    logger.info(f"[PRM Data Collection] Multi-GPU mode: Using suffix '{args.output_suffix}'")
+                else:
+                    batch_name = f"{task_name}_{args.method}_{timestamp_str}"
+                
                 logger.info(f"[PRM Data Collection] Batch name: {batch_name}")
                 
                 # Save batch data

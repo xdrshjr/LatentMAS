@@ -274,11 +274,13 @@ def main_direct(data_path: Optional[str] = None):
     # Create a mock args object with hardcoded parameters
     # We'll use argparse.Namespace to create an object similar to parsed args
     # "/root/autodl-fs/models/hub/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c"
+    # /root/autodl-fs/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca
+    # "/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
     #
     args_dict = {
         # Core parameters
         "method": "latent_mas_multipath",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
-        "model_name": "/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
+        "model_name": "/root/autodl-fs/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
         "max_samples": 20,  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
         "prompt": "sequential",  # Options: "sequential", "hierarchical"
@@ -286,9 +288,9 @@ def main_direct(data_path: Optional[str] = None):
         "split": "test",  # Split name (not used in custom mode, but required)
         
         # Generation parameters
-        "max_new_tokens": 8192,  # Maximum tokens to generate
-        "latent_steps": 3,  # Number of latent steps (for latent_mas and latent_mas_multipath)
-        "temperature": 0.1,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
+        "max_new_tokens": 4096,  # Maximum tokens to generate
+        "latent_steps": 2,  # Number of latent steps (for latent_mas and latent_mas_multipath)
+        "temperature": 1.5,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
         "top_p": 0.95,  # Top-p sampling parameter
         "generate_bs": 1,  # Batch size for generation
         
@@ -298,14 +300,15 @@ def main_direct(data_path: Optional[str] = None):
         "latent_space_realign": True,  # Latent space realignment
         
         # Multi-path specific parameters (for latent_mas_multipath)
-        "num_paths": 10,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
+        "num_paths": 50,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
         "enable_branching": True,  # Enable adaptive branching based on uncertainty
-        "enable_merging": True,  # Enable path merging for efficiency (reduces redundant computation)
+        "enable_merging": False,  # Enable path merging for efficiency (reduces redundant computation)
         "pruning_strategy": "topk",  # Options: "topk", "adaptive", "diversity", "budget"
                                          # - "topk": Keep top-k paths by score (simple, fast)
                                          # - "adaptive": Adjust pruning rate by progress (recommended)
                                          # - "diversity": Balance score and diversity (good for exploration)
                                          # - "budget": Prune based on computational budget
+        "topk_k": 1,  # Number of paths to keep when using topk pruning strategy (only effective when pruning_strategy=topk)
         "merge_threshold": 0.9,  # Similarity threshold for path merging (0.0-1.0)
                                  # Higher = only merge very similar paths, Lower = merge more aggressively
         "branch_threshold": 0.5,  # Uncertainty threshold for branching (0.0-1.0)
@@ -314,7 +317,7 @@ def main_direct(data_path: Optional[str] = None):
                                         # - "temperature": Use different temperatures per path
                                         # - "noise": Add noise to hidden states
                                         # - "hybrid": Combine both strategies (recommended)
-        "latent_consistency_metric": "kl_divergence",  # Options: "cosine", "euclidean", "l2", "kl_divergence"
+        "latent_consistency_metric": "cosine",  # Options: "cosine", "euclidean", "l2", "kl_divergence"
                                                 # Similarity metric for latent consistency scoring
                                                 # - "cosine": Cosine similarity (default, fast and effective)
                                                 # - "euclidean": Euclidean distance
