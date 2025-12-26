@@ -134,12 +134,15 @@ class PRMDataStorage:
                 f"Mismatch: {len(question_records)} questions but {len(tree_structures)} tree structures"
             )
         
-        # Create filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{batch_name}_{timestamp}.pt"
+        # Create filename directly from batch_name (which already includes timestamp)
+        # Don't add another timestamp to avoid duplication
+        filename = f"{batch_name}.pt"
         filepath = self.output_dir / filename
+        logger.info(f"[PRMDataStorage] Output file: {filepath}")
         
         # Prepare batch data
+        # Extract timestamp from batch_name if it contains one, or use current time
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         batch_data = {
             "batch_name": batch_name,
             "timestamp": timestamp,
@@ -251,7 +254,8 @@ class PRMDataStorage:
         logger.info(f"[PRMDataStorage] Loading question data from: {filepath}")
         
         try:
-            data = torch.load(filepath)
+            # Load with weights_only=False since we have numpy objects and custom classes
+            data = torch.load(filepath, weights_only=False)
             logger.info(f"[PRMDataStorage] Loaded question {data['question_id']}")
             logger.debug(f"[PRMDataStorage] Question has {len(data['paths'])} paths")
             return data
@@ -271,7 +275,8 @@ class PRMDataStorage:
         logger.info(f"[PRMDataStorage] Loading batch data from: {filepath}")
         
         try:
-            data = torch.load(filepath)
+            # Load with weights_only=False since we have numpy objects and custom classes
+            data = torch.load(filepath, weights_only=False)
             logger.info(f"[PRMDataStorage] Loaded batch '{data['batch_name']}' "
                        f"with {data['num_questions']} questions")
             return data
@@ -345,7 +350,8 @@ class PRMDataStorage:
         for pt_file in sorted(pt_files):
             try:
                 # Load file to get metadata
-                data = torch.load(pt_file)
+                # Load with weights_only=False since we have numpy objects and custom classes
+                data = torch.load(pt_file, weights_only=False)
                 
                 file_info = {
                     "filename": pt_file.name,

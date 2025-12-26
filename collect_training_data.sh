@@ -23,21 +23,15 @@
 
 # ==================================Single-GPU Configuration==================================
 #export CUDA_VISIBLE_DEVICES=0
-#export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=1
+ENABLE_MULTI_GPU=false
 
 # ==================================Multi-GPU Configuration==================================
 # Set to true to enable multi-GPU parallel data collection
-export CUDA_VISIBLE_DEVICES=0,1
-ENABLE_MULTI_GPU=true
-
-# Number of GPUs to use (only effective when ENABLE_MULTI_GPU=true)
-NUM_GPUS=2
-
-# Comma-separated GPU IDs to use (e.g., "0,1,2,3")
-# Must match NUM_GPUS count
-GPU_IDS="0,1"
-
-
+#export CUDA_VISIBLE_DEVICES=0,1
+#GPU_IDS="0,1"
+#ENABLE_MULTI_GPU=true
+#NUM_GPUS=2
 
 # ==================================Cloud Compute==================================
 # These settings are used when ENABLE_MULTI_GPU=false

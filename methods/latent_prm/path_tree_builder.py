@@ -47,6 +47,7 @@ class PathTreeBuilder:
     
     def __init__(self):
         """Initialize the path tree builder."""
+        self.path_records_cache = []  # Cache for accessing path metadata during scoring
         logger.debug("[PathTreeBuilder] Initialized")
     
     def build_tree(
@@ -58,17 +59,21 @@ class PathTreeBuilder:
         
         Args:
             path_records: List of PathRecord objects
-            is_correct: Whether the final answer is correct
+            is_correct: Whether the final answer is correct (aggregated, used as fallback)
             
         Returns:
             Dictionary representing the tree structure with PRM scores
         """
         logger.info(f"[PathTreeBuilder] Building tree from {len(path_records)} paths")
-        logger.info(f"[PathTreeBuilder] Final answer correct: {is_correct}")
+        logger.info(f"[PathTreeBuilder] Aggregated final answer correct: {is_correct}")
         
         if not path_records:
             logger.warning("[PathTreeBuilder] No path records provided")
             return {"nodes": [], "edges": [], "root_ids": []}
+        
+        # Cache path records for access during PRM score computation
+        self.path_records_cache = path_records
+        logger.debug(f"[PathTreeBuilder] Cached {len(path_records)} path records for PRM scoring")
         
         # Create tree nodes
         nodes = {}
@@ -178,26 +183,70 @@ class PathTreeBuilder:
     ) -> None:
         """Compute PRM scores based on descendant success rates.
         
-        For leaf nodes: score = 1.0 if final answer is correct, else 0.0
+        For leaf nodes: 
+            - If individual path correctness is available (PRM mode), use it
+            - Otherwise, use aggregated final answer correctness
         For internal nodes: score = average of children's PRM scores
         
         Args:
             nodes: Dictionary of tree nodes
-            is_correct: Whether the final answer is correct
+            is_correct: Whether the final answer is correct (aggregated, used as fallback)
         """
         logger.info("[PathTreeBuilder] Computing PRM scores")
-        logger.debug(f"[PathTreeBuilder] Final answer correct: {is_correct}")
+        logger.debug(f"[PathTreeBuilder] Aggregated final answer correct: {is_correct}")
         
         # Find all leaf nodes
         leaf_nodes = [node for node in nodes.values() if node.is_leaf]
         logger.info(f"[PathTreeBuilder] Found {len(leaf_nodes)} leaf nodes")
         
-        # Assign scores to leaf nodes based on final correctness
-        leaf_score = 1.0 if is_correct else 0.0
+        # Check if we have individual path correctness (PRM data collection mode)
+        has_individual_correctness = False
         for leaf_node in leaf_nodes:
-            leaf_node.prm_score = leaf_score
-            logger.debug(f"[PathTreeBuilder] Leaf node {leaf_node.path_id}: "
-                        f"prm_score={leaf_score}")
+            # Find corresponding path_record to check for individual correctness
+            path_record = next((pr for pr in self.path_records_cache if pr.path_id == leaf_node.path_id), None)
+            if path_record and 'is_correct' in path_record.metadata:
+                has_individual_correctness = True
+                break
+        
+        if has_individual_correctness:
+            logger.info("[PathTreeBuilder] Using INDIVIDUAL path correctness for PRM scoring (PRM data collection mode)")
+        else:
+            logger.info("[PathTreeBuilder] Using AGGREGATED final answer correctness for PRM scoring (normal inference mode)")
+        
+        # Assign scores to leaf nodes
+        num_correct_paths = 0
+        num_incorrect_paths = 0
+        
+        for leaf_node in leaf_nodes:
+            # Find corresponding path_record
+            path_record = next((pr for pr in self.path_records_cache if pr.path_id == leaf_node.path_id), None)
+            
+            if path_record and 'is_correct' in path_record.metadata:
+                # Use individual path correctness (PRM mode)
+                path_is_correct = path_record.metadata['is_correct']
+                leaf_score = 1.0 if path_is_correct else 0.0
+                leaf_node.prm_score = leaf_score
+                
+                if path_is_correct:
+                    num_correct_paths += 1
+                else:
+                    num_incorrect_paths += 1
+                
+                logger.debug(f"[PathTreeBuilder] Leaf node {leaf_node.path_id}: "
+                            f"individual_correct={path_is_correct}, prm_score={leaf_score}")
+            else:
+                # Fallback: use aggregated final answer correctness
+                leaf_score = 1.0 if is_correct else 0.0
+                leaf_node.prm_score = leaf_score
+                logger.debug(f"[PathTreeBuilder] Leaf node {leaf_node.path_id}: "
+                            f"using aggregated correctness, prm_score={leaf_score}")
+        
+        if has_individual_correctness:
+            logger.info(f"[PathTreeBuilder] Individual path results: {num_correct_paths} correct, "
+                       f"{num_incorrect_paths} incorrect out of {len(leaf_nodes)} total")
+            if len(leaf_nodes) > 0:
+                accuracy = num_correct_paths / len(leaf_nodes) * 100
+                logger.info(f"[PathTreeBuilder] Individual path accuracy: {accuracy:.1f}%")
         
         # Propagate scores backward from leaves to roots
         # Use topological sort (reverse BFS by depth)

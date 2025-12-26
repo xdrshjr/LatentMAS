@@ -950,7 +950,9 @@ def aggregate_prm_data(
             continue
         
         try:
-            gpu_data = torch.load(data_file, map_location='cpu')
+            # Load with weights_only=False since we have numpy objects and custom classes
+            # This is safe as we trust the source (our own generated data)
+            gpu_data = torch.load(data_file, map_location='cpu', weights_only=False)
             question_records = gpu_data.get('question_records', [])
             tree_structures = gpu_data.get('tree_structures', [])
             

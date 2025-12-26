@@ -389,6 +389,72 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         
         return should_branch
     
+    def _verify_path_answer(
+        self,
+        raw_answer: str,
+        gold_answer: str,
+        task: str,
+        item: Dict
+    ) -> tuple:
+        """Verify a single path's answer against ground truth.
+        
+        Args:
+            raw_answer: Raw generated answer text
+            gold_answer: Ground truth answer
+            task: Task name (gsm8k, aime2024, etc.)
+            item: Full item dictionary (for code tasks)
+            
+        Returns:
+            Tuple of (extracted_answer, is_correct)
+        """
+        from utils import extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
+        
+        logger.debug(f"[_verify_path_answer] Verifying answer for task: {task}")
+        logger.debug(f"[_verify_path_answer] Raw answer length: {len(raw_answer)} chars")
+        logger.debug(f"[_verify_path_answer] Gold answer: {gold_answer}")
+        
+        # Extract and verify based on task type
+        if task in ['mbppplus', 'humanevalplus']:
+            # Code generation tasks
+            extracted = extract_markdown_python_block(raw_answer)
+            
+            if extracted is None:
+                logger.debug(f"[_verify_path_answer] No Python code block found")
+                return "", False
+            
+            # Execute code with test cases
+            python_code_to_exe = extracted + "\n" + gold_answer
+            is_correct, error_msg = run_with_timeout(python_code_to_exe, timeout=10)
+            
+            if error_msg:
+                logger.debug(f"[_verify_path_answer] Code execution error: {error_msg}")
+            
+            return extracted, is_correct
+        
+        elif task in ["aime2024", "aime2025"]:
+            # Integer answer tasks
+            extracted = normalize_answer(extract_gsm8k_answer(raw_answer))
+            gold = str(gold_answer).strip()
+            
+            try:
+                pred_int = int(extracted)
+                gold_int = int(gold)
+                is_correct = (pred_int == gold_int)
+                logger.debug(f"[_verify_path_answer] Integer comparison: {pred_int} vs {gold_int} = {is_correct}")
+                return extracted, is_correct
+            except ValueError as e:
+                logger.debug(f"[_verify_path_answer] ValueError in parsing: {e}")
+                return extracted if extracted else "", False
+        
+        else:
+            # Default: GSM8K-style tasks
+            extracted = normalize_answer(extract_gsm8k_answer(raw_answer))
+            gold = gold_answer if isinstance(gold_answer, str) else str(gold_answer)
+            is_correct = (extracted == gold) if (extracted and gold) else False
+            
+            logger.debug(f"[_verify_path_answer] String comparison: '{extracted}' vs '{gold}' = {is_correct}")
+            return extracted if extracted else "", is_correct
+    
     @torch.no_grad()
     def run_batch(self, items: List[Dict]) -> List[Dict]:
         """Run multi-path reasoning on a batch of items.
@@ -1007,9 +1073,13 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                     logger.info(f"[GPU Memory] After agent {agent.name}: allocated={gpu_mem_after_agent:.2f}GB")
             
             else:
-                # Judger agent: aggregate multiple paths
-                logger.info(f"[{agent.name}] Starting final answer aggregation")
-                logger.debug(f"[{agent.name}] Will aggregate paths from all previous agents")
+                # Judger agent: aggregate multiple paths OR verify individual paths (PRM mode)
+                if self.collect_prm_data:
+                    logger.info(f"[{agent.name}] PRM Data Collection Mode: Decoding and verifying ALL paths individually")
+                    logger.info(f"[{agent.name}] Will NOT aggregate - each path gets individual correctness score")
+                else:
+                    logger.info(f"[{agent.name}] Starting final answer aggregation")
+                    logger.debug(f"[{agent.name}] Will aggregate paths from all previous agents")
                 
                 # Wrap prompts with <think> tag if needed
                 if self.args.think:
@@ -1035,7 +1105,10 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         gpu_mem_judger_start = torch.cuda.memory_allocated() / 1024**3
                         logger.debug(f"[GPU Memory] Judger item {batch_idx + 1} start: {gpu_mem_judger_start:.2f}GB")
                     
-                    logger.info(f"[{agent.name}] Aggregating paths for item {batch_idx + 1}/{batch_size}")
+                    if self.collect_prm_data:
+                        logger.info(f"[{agent.name}] PRM Mode: Verifying {len(item_paths)} paths individually for item {batch_idx + 1}/{batch_size}")
+                    else:
+                        logger.info(f"[{agent.name}] Aggregating paths for item {batch_idx + 1}/{batch_size}")
                     logger.info(f"[{agent.name}] Available paths: {len(item_paths)}")
                     
                     if not item_paths:
@@ -1051,7 +1124,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                         )
                         final_texts[batch_idx] = generated_batch[0].strip()
                     else:
-                        # Aggregate multiple paths using voting
+                        # Generate answers from all paths
                         logger.info(f"[{agent.name}] Generating answers from {len(item_paths)} paths")
                         
                         path_answers = []
@@ -1079,22 +1152,76 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             if new_kv_cache is not None:
                                 del new_kv_cache
                         
-                        # Voting: weight by path scores
-                        logger.info(f"[{agent.name}] Performing weighted voting across {len(path_answers)} answers")
-                        answer_votes = {}
-                        for answer, score in zip(path_answers, path_scores):
-                            if answer not in answer_votes:
-                                answer_votes[answer] = 0.0
-                            answer_votes[answer] += score
+                        # PRM Mode: Verify each path individually and store results
+                        if self.collect_prm_data:
+                            logger.info(f"[{agent.name}] PRM Mode: Verifying individual path correctness")
+                            logger.info("=" * 80)
+                            logger.info(f"[{agent.name}] INDIVIDUAL PATH VERIFICATION REPORT")
+                            logger.info("=" * 80)
+                            
+                            gold_answer = items[batch_idx].get("gold", "")
+                            
+                            for path_idx, (path, raw_answer) in enumerate(zip(item_paths, path_answers)):
+                                # Extract and normalize answer based on task type
+                                extracted_answer, is_path_correct = self._verify_path_answer(
+                                    raw_answer=raw_answer,
+                                    gold_answer=gold_answer,
+                                    task=self.task,
+                                    item=items[batch_idx]
+                                )
+                                
+                                # Store individual path results in metadata for PRM scoring
+                                path.metadata['decoded_answer'] = raw_answer
+                                path.metadata['extracted_answer'] = extracted_answer
+                                path.metadata['is_correct'] = is_path_correct
+                                
+                                # Log individual path verification
+                                logger.info(f"[{agent.name}] Path {path.path_id} (#{path_idx + 1}/{len(item_paths)}):")
+                                logger.info(f"  - Raw answer: {raw_answer[:100]}{'...' if len(raw_answer) > 100 else ''}")
+                                logger.info(f"  - Extracted: {extracted_answer}")
+                                logger.info(f"  - Gold: {gold_answer}")
+                                logger.info(f"  - Result: {'✓ CORRECT' if is_path_correct else '✗ INCORRECT'}")
+                                logger.debug(f"  - Original score: {path.score:.4f}")
+                            
+                            logger.info("=" * 80)
+                            
+                            # Count correct paths
+                            num_correct = sum(1 for p in item_paths if p.metadata.get('is_correct', False))
+                            logger.info(f"[{agent.name}] Path verification summary: {num_correct}/{len(item_paths)} paths correct")
+                            logger.info(f"[{agent.name}] Individual path accuracy: {num_correct / len(item_paths) * 100:.1f}%")
+                            
+                            # For final answer in PRM mode, use majority voting (but don't use it for scoring)
+                            # This is just for reporting purposes
+                            correct_answers = [p.metadata['extracted_answer'] for p in item_paths if p.metadata.get('is_correct', False)]
+                            if correct_answers:
+                                # Use the most common correct answer
+                                from collections import Counter
+                                answer_counts = Counter(correct_answers)
+                                final_texts[batch_idx] = answer_counts.most_common(1)[0][0]
+                                logger.info(f"[{agent.name}] Using most common correct answer for reporting: {final_texts[batch_idx]}")
+                            else:
+                                # No correct paths, use the answer from highest-scored path
+                                best_path_idx = path_scores.index(max(path_scores))
+                                final_texts[batch_idx] = item_paths[best_path_idx].metadata['extracted_answer']
+                                logger.warning(f"[{agent.name}] No correct paths found, using answer from best-scored path")
                         
-                        logger.debug(f"[{agent.name}] Vote distribution: {answer_votes}")
-                        
-                        # Select answer with highest weighted vote
-                        best_answer = max(answer_votes.items(), key=lambda x: x[1])[0]
-                        final_texts[batch_idx] = best_answer
+                        else:
+                            # Normal inference mode: Voting to aggregate
+                            logger.info(f"[{agent.name}] Performing weighted voting across {len(path_answers)} answers")
+                            answer_votes = {}
+                            for answer, score in zip(path_answers, path_scores):
+                                if answer not in answer_votes:
+                                    answer_votes[answer] = 0.0
+                                answer_votes[answer] += score
+                            
+                            logger.debug(f"[{agent.name}] Vote distribution: {answer_votes}")
+                            
+                            # Select answer with highest weighted vote
+                            best_answer = max(answer_votes.items(), key=lambda x: x[1])[0]
+                            final_texts[batch_idx] = best_answer
 
-                        logger.info(f"[{agent.name}] Selected final answer: {best_answer}")
-                        logger.info(f"[{agent.name}] Winning vote weight: {answer_votes[best_answer]:.4f}")
+                            logger.info(f"[{agent.name}] Selected final answer: {best_answer}")
+                            logger.info(f"[{agent.name}] Winning vote weight: {answer_votes[best_answer]:.4f}")
                     
                     # Log GPU memory after judger processing
                     if torch.cuda.is_available():

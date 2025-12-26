@@ -197,8 +197,8 @@ class LatentPRMDataCollector:
         """Finish collecting data for the current question.
         
         Args:
-            final_answer: Final predicted answer
-            is_correct: Whether the answer is correct
+            final_answer: Final predicted answer (for reporting, may be aggregated)
+            is_correct: Whether the final answer is correct (for reporting, may be aggregated)
         """
         if not self.enabled or self.current_question is None:
             return
@@ -206,6 +206,18 @@ class LatentPRMDataCollector:
         logger.info(f"[DataCollector] Finishing question {self.current_question.question_id}")
         logger.info(f"[DataCollector] Final answer: {final_answer}, "
                    f"Correct: {is_correct}")
+        
+        # Transfer individual path correctness from metadata to path records
+        # This is set by the judger in PRM data collection mode
+        for path_id, path_record in self.path_records.items():
+            if 'is_correct' in path_record.metadata:
+                # Individual path correctness was verified by judger
+                path_is_correct = path_record.metadata['is_correct']
+                logger.debug(f"[DataCollector] Path {path_id} individual correctness: {path_is_correct}")
+                # Store in path record for later use (not just metadata)
+                # This will be used by PathTreeBuilder for PRM scoring
+            else:
+                logger.debug(f"[DataCollector] Path {path_id} has no individual correctness (normal inference mode)")
         
         # Update question record
         self.current_question.final_answer = final_answer
