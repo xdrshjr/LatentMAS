@@ -66,6 +66,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         enable_branching: bool = True,
         enable_merging: bool = True,
         pruning_strategy: str = "adaptive",
+        topk_k: int = 3,
         scoring_weights: Optional[Dict[str, float]] = None,
         merge_threshold: float = 0.9,
         branch_threshold: float = 0.5,
@@ -110,12 +111,15 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         self.merge_threshold = merge_threshold
         self.branch_threshold = branch_threshold
         self.latent_consistency_metric = latent_consistency_metric
+        self.topk_k = topk_k
         
         # Override method name
         self.method_name = 'latent_mas_multipath'
         
         logger.info(f"Initialized: num_paths={num_paths}, pruning={pruning_strategy}, "
                    f"diversity={diversity_strategy}, branching={enable_branching}, merging={enable_merging}")
+        if pruning_strategy == "topk":
+            logger.info(f"  - topk_k: {topk_k} (number of paths to keep when using topk pruning)")
         logger.debug(f"  - merge_threshold: {merge_threshold}")
         logger.debug(f"  - branch_threshold: {branch_threshold}")
         
@@ -183,8 +187,10 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         logger.info(f"[LatentMASMultiPathMethod] Initialized EnsembleScorer with weights: {scoring_weights}")
         
         # Initialize pruning strategy
-        self.pruning_strategy = self._create_pruning_strategy(pruning_strategy)
+        self.pruning_strategy = self._create_pruning_strategy(pruning_strategy, topk_k)
         logger.debug(f"[LatentMASMultiPathMethod] Created pruning strategy: {pruning_strategy}")
+        if pruning_strategy == "topk":
+            logger.info(f"[LatentMASMultiPathMethod] TopK pruning configured with k={topk_k}")
         
         # Initialize path merger
         similarity_detector = PathSimilarityDetector(cosine_threshold=merge_threshold)
@@ -218,22 +224,27 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                          f"using 'hybrid' as default with base_temperature={base_temperature}")
             return HybridDiversityStrategy(base_temperature=base_temperature)
     
-    def _create_pruning_strategy(self, strategy_name: str):
+    def _create_pruning_strategy(self, strategy_name: str, topk_k: int = 3):
         """Create pruning strategy based on name.
         
         Args:
             strategy_name: Name of the pruning strategy
+            topk_k: Number of paths to keep when using topk pruning strategy (only effective when strategy_name=topk)
             
         Returns:
             Pruning strategy instance
         """
         if strategy_name == "topk":
-            return TopKPruning(k=self.num_paths)
+            logger.info(f"[LatentMASMultiPathMethod] Creating TopKPruning with k={topk_k}")
+            return TopKPruning(k=topk_k)
         elif strategy_name == "adaptive":
+            logger.debug(f"[LatentMASMultiPathMethod] Creating AdaptivePruning with min_paths={max(2, self.num_paths // 2)}")
             return AdaptivePruning(min_paths=max(2, self.num_paths // 2))
         elif strategy_name == "diversity":
+            logger.debug(f"[LatentMASMultiPathMethod] Creating DiversityAwarePruning with target_count={self.num_paths}")
             return DiversityAwarePruning(target_count=self.num_paths)
         elif strategy_name == "budget":
+            logger.debug(f"[LatentMASMultiPathMethod] Creating BudgetBasedPruning with max_budget=1000000")
             return BudgetBasedPruning(max_budget=1000000)
         else:
             logger.warning(f"[LatentMASMultiPathMethod] Unknown pruning strategy '{strategy_name}', "
@@ -620,11 +631,16 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             force_keep_count=1,  # Force Refiner to keep only 1 path
                         )
                     else:
-                        pruned_paths = self.pruning_strategy.prune(
-                            paths=new_paths,
-                            current_step=agent_idx,
-                            total_steps=len(self.agents),
-                        )
+                        # Pass k parameter when using topk strategy
+                        prune_kwargs = {
+                            "paths": new_paths,
+                            "current_step": agent_idx,
+                            "total_steps": len(self.agents),
+                        }
+                        if isinstance(self.pruning_strategy, TopKPruning):
+                            prune_kwargs["k"] = self.topk_k
+                            logger.debug(f"[{agent.name}] Using topk pruning with k={self.topk_k}")
+                        pruned_paths = self.pruning_strategy.prune(**prune_kwargs)
                     
                     logger.info(f"[{agent.name}] Pruning complete: kept {len(pruned_paths)}/{len(new_paths)} paths")
                     kept_paths_info = [(p.path_id, p.score) for p in pruned_paths]
@@ -1336,11 +1352,16 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             force_keep_count=1,
                         )
                     else:
-                        pruned_paths = self.pruning_strategy.prune(
-                            paths=batch_paths[batch_idx],
-                            current_step=agent_idx,
-                            total_steps=len(self.agents),
-                        )
+                        # Pass k parameter when using topk strategy
+                        prune_kwargs = {
+                            "paths": batch_paths[batch_idx],
+                            "current_step": agent_idx,
+                            "total_steps": len(self.agents),
+                        }
+                        if isinstance(self.pruning_strategy, TopKPruning):
+                            prune_kwargs["k"] = self.topk_k
+                            logger.debug(f"[{agent.name}][vLLM] Using topk pruning with k={self.topk_k}")
+                        pruned_paths = self.pruning_strategy.prune(**prune_kwargs)
                     
                     logger.info(f"Pruning: kept {len(pruned_paths)}/{len(batch_paths[batch_idx])} paths [vLLM]")
                     

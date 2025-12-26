@@ -697,6 +697,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         parser.add_argument("--enable_merging", action="store_true", help="Enable path merging in multi-path reasoning")
         parser.add_argument("--pruning_strategy", type=str, choices=["topk", "adaptive", "diversity", "budget"], default="adaptive",
                             help="Pruning strategy for multi-path reasoning")
+        parser.add_argument("--topk_k", type=int, default=3, help="Number of paths to keep when using topk pruning strategy (only effective when pruning_strategy=topk)")
         parser.add_argument("--merge_threshold", type=float, default=0.9, help="Similarity threshold for path merging")
         parser.add_argument("--branch_threshold", type=float, default=0.5, help="Uncertainty threshold for adaptive branching")
         parser.add_argument("--diversity_strategy", type=str, choices=["temperature", "noise", "hybrid"], default="hybrid",
@@ -924,6 +925,9 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         )
     elif args.method == 'latent_mas_multipath':
         logger.info(f"[Method Init] Initializing LatentMASMultiPathMethod with latent_consistency_metric={args.latent_consistency_metric}")
+        # Log topk_k parameter if pruning_strategy is topk
+        if args.pruning_strategy == "topk":
+            logger.info(f"[Method Init] Using topk pruning strategy with k={args.topk_k}")
         method = LatentMASMultiPathMethod(
             model,
             latent_steps=args.latent_steps,
@@ -935,6 +939,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
             enable_branching=args.enable_branching,
             enable_merging=args.enable_merging,
             pruning_strategy=args.pruning_strategy,
+            topk_k=args.topk_k,
             merge_threshold=args.merge_threshold,
             branch_threshold=args.branch_threshold,
             diversity_strategy=args.diversity_strategy,
