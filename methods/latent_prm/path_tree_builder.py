@@ -292,6 +292,21 @@ class PathTreeBuilder:
             logger.info(f"  - Max: {max(prm_scores):.4f}")
             logger.info(f"  - Mean: {np.mean(prm_scores):.4f}")
             logger.info(f"  - Std: {np.std(prm_scores):.4f}")
+        
+        # CRITICAL: Transfer PRM scores from TreeNodes back to PathRecords
+        # This ensures the scores are saved in the final data files
+        logger.info("[PathTreeBuilder] Transferring PRM scores back to PathRecords")
+        num_transferred = 0
+        for node in nodes.values():
+            # Find corresponding path_record
+            path_record = next((pr for pr in self.path_records_cache if pr.path_id == node.path_id), None)
+            if path_record and node.prm_score is not None:
+                path_record.prm_score = node.prm_score
+                num_transferred += 1
+                logger.debug(f"[PathTreeBuilder] Transferred PRM score {node.prm_score:.4f} "
+                           f"to PathRecord {path_record.path_id}")
+        
+        logger.info(f"[PathTreeBuilder] Transferred {num_transferred} PRM scores to PathRecords")
     
     def get_path_to_root(
         self,

@@ -54,7 +54,7 @@ MODEL_NAME="/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapsh
 # ==================================Configuration==================================
 # Dataset configuration
 TASK="gsm8k"                    # Dataset to use (gsm8k, aime2024, etc.)
-MAX_SAMPLES=2                  # Number of questions to collect data for (-1 for all)
+MAX_SAMPLES=100                  # Number of questions to collect data for (-1 for all)
 SEED=42                         # Random seed for reproducibility
 
 # Model configuration
