@@ -32,7 +32,7 @@ MODEL_NAME="/autodl-fs/data/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899d
 # ==================================Configuration==================================
 # Dataset configuration
 TASK="gsm8k"                    # Dataset to use (gsm8k, aime2024, etc.)
-MAX_SAMPLES=10                 # Number of questions to collect data for (-1 for all)
+MAX_SAMPLES=100                 # Number of questions to collect data for (-1 for all)
 SEED=42                         # Random seed for reproducibility
 
 # Model configuration
@@ -41,7 +41,7 @@ TEMPERATURE=0.7                 # Baseline temperature for diversity
 TOP_P=0.95                      # Nucleus sampling parameter
 
 # Multi-path configuration (for data collection)
-NUM_PATHS=10                    # Number of paths to generate per agent (increased for diversity)
+NUM_PATHS=20                    # Number of paths to generate per agent (increased for diversity)
 LATENT_STEPS=5                  # Number of latent thinking steps per path
 DIVERSITY_STRATEGY="hybrid"     # Diversity strategy (temperature/noise/hybrid)
 

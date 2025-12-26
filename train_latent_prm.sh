@@ -55,6 +55,11 @@ DROPOUT_PROB=0.1                   # Dropout probability
 MAX_SEQ_LENGTH=None                 # Maximum sequence length (None = no limit)
 USE_PRM_SCORE=true                 # Use prm_score (true) or score (false) as target
 
+# Validation configuration
+ENABLE_VALIDATION=true             # Whether to use validation set for evaluation
+VAL_SIZE=0.1                       # Validation set size (0.0-1.0 for ratio, >1 for count)
+VAL_STEPS=100                      # Run validation every N steps
+
 # Logging and checkpointing
 SAVE_CHECKPOINTS=false              # Whether to save checkpoints during training
 SAVE_STEPS=1000000                 # Save checkpoint every N steps (only if SAVE_CHECKPOINTS=true)
@@ -113,6 +118,11 @@ echo "  - Dropout probability: ${DROPOUT_PROB}"
 echo "  - Max sequence length: ${MAX_SEQ_LENGTH}"
 echo "  - Use prm_score: ${USE_PRM_SCORE}"
 echo ""
+echo "Validation configuration:"
+echo "  - Enable validation: ${ENABLE_VALIDATION}"
+echo "  - Validation size: ${VAL_SIZE}"
+echo "  - Validation steps: ${VAL_STEPS}"
+echo ""
 echo "Logging and checkpointing:"
 echo "  - Save checkpoints: ${SAVE_CHECKPOINTS}"
 echo "  - Save steps: ${SAVE_STEPS}"
@@ -144,6 +154,8 @@ CMD_ARGS=(
     --max_grad_norm ${MAX_GRAD_NORM}
     --save_steps ${SAVE_STEPS}
     --logging_steps ${LOGGING_STEPS}
+    --val_size ${VAL_SIZE}
+    --val_steps ${VAL_STEPS}
     --pooling_strategy ${POOLING_STRATEGY}
     --dropout_prob ${DROPOUT_PROB}
     --device ${DEVICE}
@@ -162,6 +174,10 @@ fi
 
 if [ "${SAVE_CHECKPOINTS}" = false ]; then
     CMD_ARGS+=(--no_save_checkpoints)
+fi
+
+if [ "${ENABLE_VALIDATION}" = true ]; then
+    CMD_ARGS+=(--enable_validation)
 fi
 
 if [ ! -z "${MAX_SEQ_LENGTH}" ] && [ "${MAX_SEQ_LENGTH}" != "None" ]; then

@@ -8,7 +8,7 @@ import logging
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -324,6 +324,69 @@ def collate_fn(batch: List[Tuple[torch.Tensor, float, Dict[str, Any]]]) -> Dict[
     }
 
 
+def split_dataset(
+    dataset: LatentPRMDataset,
+    val_size: float = 0.1,
+    seed: int = 42
+) -> Tuple[Subset, Subset]:
+    """Split dataset into training and validation subsets.
+    
+    Args:
+        dataset: The full dataset to split
+        val_size: Validation set size. If < 1.0, treated as ratio; if >= 1, treated as count
+        seed: Random seed for reproducible splitting
+        
+    Returns:
+        Tuple of (train_subset, val_subset)
+    """
+    total_size = len(dataset)
+    
+    if total_size == 0:
+        logger.error("[split_dataset] Cannot split empty dataset")
+        raise ValueError("Cannot split empty dataset")
+    
+    # Determine validation size
+    if val_size < 1.0:
+        # Treat as ratio
+        val_count = max(1, int(total_size * val_size))
+        logger.info(f"[split_dataset] Using validation ratio: {val_size:.2%} = {val_count} samples")
+    else:
+        # Treat as absolute count
+        val_count = int(val_size)
+        if val_count >= total_size:
+            logger.warning(f"[split_dataset] Validation size {val_count} >= total size {total_size}, "
+                          f"using {total_size - 1} instead")
+            val_count = max(1, total_size - 1)
+        logger.info(f"[split_dataset] Using validation count: {val_count} samples")
+    
+    train_count = total_size - val_count
+    
+    logger.info(f"[split_dataset] Splitting dataset:")
+    logger.info(f"  - Total samples: {total_size}")
+    logger.info(f"  - Training samples: {train_count} ({train_count/total_size:.2%})")
+    logger.info(f"  - Validation samples: {val_count} ({val_count/total_size:.2%})")
+    
+    # Create reproducible random split
+    indices = list(range(total_size))
+    rng = np.random.RandomState(seed)
+    rng.shuffle(indices)
+    
+    train_indices = indices[:train_count]
+    val_indices = indices[train_count:]
+    
+    logger.debug(f"[split_dataset] Train indices: {len(train_indices)}, Val indices: {len(val_indices)}")
+    logger.debug(f"[split_dataset] First 5 train indices: {train_indices[:5]}")
+    logger.debug(f"[split_dataset] First 5 val indices: {val_indices[:5]}")
+    
+    # Create subsets
+    train_subset = Subset(dataset, train_indices)
+    val_subset = Subset(dataset, val_indices)
+    
+    logger.info(f"[split_dataset] ✓ Dataset split completed")
+    
+    return train_subset, val_subset
+
+
 def create_dataloader(
     data_dir: str,
     batch_size: int = 4,
@@ -381,4 +444,80 @@ def create_dataloader(
                f"{len(dataloader)} batches")
     
     return dataloader
+
+
+def create_train_val_dataloaders(
+    data_dir: str,
+    batch_size: int = 4,
+    val_size: float = 0.1,
+    num_workers: int = 0,
+    use_prm_score: bool = True,
+    max_seq_length: Optional[int] = None,
+    seed: int = 42,
+    **kwargs
+) -> Tuple[DataLoader, DataLoader]:
+    """Create training and validation DataLoaders with automatic data splitting.
+    
+    Args:
+        data_dir: Directory containing .pt files
+        batch_size: Batch size for training
+        val_size: Validation set size (ratio if < 1.0, count if >= 1)
+        num_workers: Number of worker processes for data loading
+        use_prm_score: Whether to use prm_score as target
+        max_seq_length: Maximum sequence length
+        seed: Random seed for reproducible splitting
+        **kwargs: Additional arguments for Dataset
+        
+    Returns:
+        Tuple of (train_dataloader, val_dataloader)
+    """
+    logger.info(f"[create_train_val_dataloaders] Creating train/val DataLoaders")
+    logger.info(f"  - data_dir: {data_dir}")
+    logger.info(f"  - batch_size: {batch_size}")
+    logger.info(f"  - val_size: {val_size}")
+    logger.info(f"  - use_prm_score: {use_prm_score}")
+    logger.info(f"  - seed: {seed}")
+    logger.debug(f"  - num_workers: {num_workers}")
+    logger.debug(f"  - max_seq_length: {max_seq_length}")
+    
+    # Create full dataset
+    full_dataset = LatentPRMDataset(
+        data_dir=data_dir,
+        use_prm_score=use_prm_score,
+        max_seq_length=max_seq_length,
+        **kwargs
+    )
+    
+    if len(full_dataset) == 0:
+        logger.error(f"[create_train_val_dataloaders] Dataset is empty! Check data directory: {data_dir}")
+        raise ValueError(f"No valid samples found in {data_dir}")
+    
+    # Split dataset
+    train_subset, val_subset = split_dataset(full_dataset, val_size=val_size, seed=seed)
+    
+    # Create train dataloader (with shuffling)
+    train_dataloader = DataLoader(
+        train_subset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        pin_memory=torch.cuda.is_available(),
+    )
+    
+    # Create validation dataloader (no shuffling)
+    val_dataloader = DataLoader(
+        val_subset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        pin_memory=torch.cuda.is_available(),
+    )
+    
+    logger.info(f"[create_train_val_dataloaders] ✓ DataLoaders created:")
+    logger.info(f"  - Train: {len(train_subset)} samples, {len(train_dataloader)} batches")
+    logger.info(f"  - Validation: {len(val_subset)} samples, {len(val_dataloader)} batches")
+    
+    return train_dataloader, val_dataloader
 

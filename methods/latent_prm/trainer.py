@@ -21,7 +21,7 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 
-from .dataset import create_dataloader
+from .dataset import create_dataloader, create_train_val_dataloaders
 from .model import create_model
 from progress_utils import ProgressBarManager
 
@@ -106,6 +106,9 @@ class LatentPRMTrainer:
         device: str = "cuda",
         mixed_precision: bool = True,
         save_checkpoints: bool = True,
+        enable_validation: bool = False,
+        val_size: float = 0.1,
+        val_steps: int = 100,
         seed: int = 42
     ):
         """Initialize the trainer.
@@ -130,6 +133,9 @@ class LatentPRMTrainer:
             device: Training device
             mixed_precision: Use mixed precision training
             save_checkpoints: Whether to save checkpoints during training
+            enable_validation: Whether to use validation set
+            val_size: Validation set size (ratio if < 1.0, count if >= 1)
+            val_steps: Run validation every N steps
             seed: Random seed
         """
         self.model_path = model_path
@@ -145,6 +151,9 @@ class LatentPRMTrainer:
         self.device = device
         self.mixed_precision = mixed_precision and torch.cuda.is_available()
         self.save_checkpoints = save_checkpoints
+        self.enable_validation = enable_validation
+        self.val_size = val_size
+        self.val_steps = val_steps
         self.seed = seed
         
         # Create output directory
@@ -161,17 +170,35 @@ class LatentPRMTrainer:
         self.progress_manager = ProgressBarManager()
         logger.debug(f"[Trainer] Progress bar manager initialized")
         
-        # Create dataloader
-        logger.info(f"[Trainer] Creating dataloader...")
-        self.dataloader = create_dataloader(
-            data_dir=data_dir,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=0,  # Set to 0 to avoid multiprocessing issues
-            use_prm_score=use_prm_score,
-            max_seq_length=max_seq_length
-        )
-        logger.info(f"[Trainer] ✓ Dataloader created: {len(self.dataloader)} batches")
+        # Create dataloaders (with or without validation split)
+        if enable_validation:
+            logger.info(f"[Trainer] Creating train/val dataloaders with validation enabled...")
+            logger.info(f"[Trainer] Validation size: {val_size}")
+            logger.info(f"[Trainer] Validation steps: {val_steps}")
+            
+            self.dataloader, self.val_dataloader = create_train_val_dataloaders(
+                data_dir=data_dir,
+                batch_size=batch_size,
+                val_size=val_size,
+                num_workers=0,  # Set to 0 to avoid multiprocessing issues
+                use_prm_score=use_prm_score,
+                max_seq_length=max_seq_length,
+                seed=seed
+            )
+            logger.info(f"[Trainer] ✓ Train dataloader created: {len(self.dataloader)} batches")
+            logger.info(f"[Trainer] ✓ Validation dataloader created: {len(self.val_dataloader)} batches")
+        else:
+            logger.info(f"[Trainer] Creating dataloader without validation...")
+            self.dataloader = create_dataloader(
+                data_dir=data_dir,
+                batch_size=batch_size,
+                shuffle=True,
+                num_workers=0,  # Set to 0 to avoid multiprocessing issues
+                use_prm_score=use_prm_score,
+                max_seq_length=max_seq_length
+            )
+            self.val_dataloader = None
+            logger.info(f"[Trainer] ✓ Dataloader created: {len(self.dataloader)} batches")
         
         # Print a data example for user reference
         self._print_data_example()
@@ -226,11 +253,14 @@ class LatentPRMTrainer:
         self.global_step = 0
         self.current_epoch = 0
         self.best_loss = float('inf')
+        self.best_val_loss = float('inf')
         
         # Loss tracking for visualization
-        self.step_losses: List[float] = []  # Loss at each optimization step
+        self.step_losses: List[float] = []  # Training loss at each optimization step
         self.step_numbers: List[int] = []   # Step numbers for x-axis
-        self.epoch_losses: List[float] = [] # Average loss per epoch
+        self.epoch_losses: List[float] = [] # Average training loss per epoch
+        self.val_losses: List[float] = []   # Validation loss at validation steps
+        self.val_step_numbers: List[int] = []  # Step numbers when validation was run
         
         logger.info(f"[Trainer] ✓ Trainer initialized successfully")
         logger.info("=" * 80)
@@ -265,6 +295,12 @@ class LatentPRMTrainer:
         logger.info(f"  - Gradient accumulation steps: {self.gradient_accumulation_steps}")
         logger.info(f"  - Max gradient norm: {self.max_grad_norm}")
         logger.info(f"  - Mixed precision: {self.mixed_precision}")
+        logger.info(f"")
+        logger.info(f"Validation configuration:")
+        logger.info(f"  - Enable validation: {self.enable_validation}")
+        if self.enable_validation:
+            logger.info(f"  - Validation size: {self.val_size}")
+            logger.info(f"  - Validation steps: {self.val_steps}")
         logger.info(f"")
         logger.info(f"Logging and checkpointing:")
         logger.info(f"  - Save checkpoints: {self.save_checkpoints}")
@@ -332,6 +368,54 @@ class LatentPRMTrainer:
             
         except Exception as e:
             logger.error(f"[Trainer] Error printing data example: {e}", exc_info=True)
+    
+    def validate(self) -> float:
+        """Run validation loop and return average validation loss.
+        
+        Returns:
+            Average validation loss
+        """
+        if self.val_dataloader is None:
+            logger.warning("[Trainer] Validation dataloader is None, skipping validation")
+            return float('inf')
+        
+        logger.info(f"[Trainer] Running validation at step {self.global_step}...")
+        
+        # Set model to evaluation mode
+        self.model.eval()
+        
+        total_val_loss = 0.0
+        num_val_batches = 0
+        
+        # Disable gradient computation for validation
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(self.val_dataloader):
+                # Move batch to device
+                latent_sequences = batch["latent_sequences"].to(self.device)
+                attention_mask = batch["attention_mask"].to(self.device)
+                target_scores = batch["target_scores"].to(self.device)
+                
+                logger.debug(f"[Trainer] Validation batch {batch_idx + 1}/{len(self.val_dataloader)}: "
+                           f"batch_size={latent_sequences.shape[0]}")
+                
+                # Forward pass (no mixed precision needed for validation)
+                pred_scores, _ = self.model(latent_sequences, attention_mask)
+                pred_scores = pred_scores.squeeze(-1)  # [batch_size]
+                loss = self.criterion(pred_scores, target_scores)
+                
+                # Accumulate loss
+                total_val_loss += loss.item()
+                num_val_batches += 1
+        
+        # Calculate average validation loss
+        avg_val_loss = total_val_loss / num_val_batches if num_val_batches > 0 else float('inf')
+        
+        logger.info(f"[Trainer] Validation completed: avg_loss={avg_val_loss:.4f}")
+        
+        # Set model back to training mode
+        self.model.train()
+        
+        return avg_val_loss
     
     def train(self) -> Dict[str, Any]:
         """Run the training loop.
@@ -475,6 +559,38 @@ class LatentPRMTrainer:
                                        f"lr={current_lr:.2e}, "
                                        f"grad_norm={grad_norm:.4f}")
                         
+                        # Run validation (if enabled)
+                        if self.enable_validation and self.global_step % self.val_steps == 0:
+                            logger.info("")
+                            logger.info("=" * 80)
+                            logger.info(f"[Trainer] Running validation at step {self.global_step}")
+                            logger.info("=" * 80)
+                            
+                            val_loss = self.validate()
+                            
+                            # Track validation loss
+                            self.val_losses.append(val_loss)
+                            self.val_step_numbers.append(self.global_step)
+                            logger.debug(f"[Trainer] Tracked validation loss for step {self.global_step}: {val_loss:.4f}")
+                            
+                            # Check if this is the best validation loss
+                            is_best_val = val_loss < self.best_val_loss
+                            if is_best_val:
+                                self.best_val_loss = val_loss
+                                logger.info(f"[Trainer] ✓ New best validation loss: {self.best_val_loss:.4f}")
+                                
+                                # Save best checkpoint based on validation
+                                if self.save_checkpoints:
+                                    logger.info(f"[Trainer] Saving best checkpoint (based on validation)")
+                                    self._save_checkpoint(
+                                        step=self.global_step,
+                                        loss=val_loss,
+                                        is_best=True
+                                    )
+                            
+                            logger.info("=" * 80)
+                            logger.info("")
+                        
                         # Save checkpoint (only if enabled)
                         if self.save_checkpoints and self.global_step % self.save_steps == 0:
                             logger.info(f"[Trainer] Saving checkpoint at step {self.global_step}")
@@ -493,26 +609,61 @@ class LatentPRMTrainer:
                 
                 logger.info("")
                 logger.info(f"[Trainer] Epoch {epoch + 1} completed:")
-                logger.info(f"  - Average loss: {avg_epoch_loss:.4f}")
+                logger.info(f"  - Average training loss: {avg_epoch_loss:.4f}")
                 logger.info(f"  - Total steps: {self.global_step}")
                 logger.info(f"  - Batches processed: {num_batches}")
                 
-                # Save epoch checkpoint (only if enabled)
-                is_best = avg_epoch_loss < self.best_loss
-                if is_best:
-                    self.best_loss = avg_epoch_loss
-                    logger.info(f"[Trainer] ✓ New best loss: {self.best_loss:.4f}")
-                
-                if self.save_checkpoints:
-                    logger.info(f"[Trainer] Saving epoch {epoch + 1} checkpoint")
-                    self._save_checkpoint(
-                        step=self.global_step,
-                        loss=avg_epoch_loss,
-                        is_best=is_best,
-                        epoch=epoch + 1
-                    )
+                # Run end-of-epoch validation if enabled
+                if self.enable_validation:
+                    logger.info("")
+                    logger.info("=" * 80)
+                    logger.info(f"[Trainer] Running end-of-epoch validation (Epoch {epoch + 1})")
+                    logger.info("=" * 80)
+                    
+                    val_loss = self.validate()
+                    
+                    # Track validation loss
+                    self.val_losses.append(val_loss)
+                    self.val_step_numbers.append(self.global_step)
+                    logger.debug(f"[Trainer] Tracked validation loss for epoch {epoch + 1}: {val_loss:.4f}")
+                    
+                    logger.info(f"  - Validation loss: {val_loss:.4f}")
+                    
+                    # Check if this is the best validation loss
+                    is_best_val = val_loss < self.best_val_loss
+                    if is_best_val:
+                        self.best_val_loss = val_loss
+                        logger.info(f"[Trainer] ✓ New best validation loss: {self.best_val_loss:.4f}")
+                    
+                    logger.info("=" * 80)
+                    logger.info("")
+                    
+                    # Save epoch checkpoint based on validation loss
+                    if self.save_checkpoints:
+                        logger.info(f"[Trainer] Saving epoch {epoch + 1} checkpoint")
+                        self._save_checkpoint(
+                            step=self.global_step,
+                            loss=val_loss,
+                            is_best=is_best_val,
+                            epoch=epoch + 1
+                        )
                 else:
-                    logger.debug(f"[Trainer] Checkpoint saving disabled, skipping epoch checkpoint")
+                    # No validation - use training loss for best model selection
+                    is_best = avg_epoch_loss < self.best_loss
+                    if is_best:
+                        self.best_loss = avg_epoch_loss
+                        logger.info(f"[Trainer] ✓ New best training loss: {self.best_loss:.4f}")
+                    
+                    if self.save_checkpoints:
+                        logger.info(f"[Trainer] Saving epoch {epoch + 1} checkpoint")
+                        self._save_checkpoint(
+                            step=self.global_step,
+                            loss=avg_epoch_loss,
+                            is_best=is_best,
+                            epoch=epoch + 1
+                        )
+                    else:
+                        logger.debug(f"[Trainer] Checkpoint saving disabled, skipping epoch checkpoint")
             
             # Training completed
             logger.info("")
@@ -520,8 +671,12 @@ class LatentPRMTrainer:
             logger.info("[Trainer] Training completed!")
             logger.info("=" * 80)
             logger.info(f"Total steps: {self.global_step}")
-            logger.info(f"Best loss: {self.best_loss:.4f}")
-            logger.info(f"Final loss: {self.epoch_losses[-1]:.4f}")
+            if self.enable_validation:
+                logger.info(f"Best validation loss: {self.best_val_loss:.4f}")
+                logger.info(f"Final validation loss: {self.val_losses[-1]:.4f}" if self.val_losses else "N/A")
+            else:
+                logger.info(f"Best training loss: {self.best_loss:.4f}")
+            logger.info(f"Final training loss: {self.epoch_losses[-1]:.4f}")
             logger.info("=" * 80)
             
             # Save final checkpoint (only if enabled)
@@ -549,7 +704,15 @@ class LatentPRMTrainer:
                 "epoch_losses": self.epoch_losses,
                 "step_losses": self.step_losses,
                 "step_numbers": self.step_numbers,
+                "enable_validation": self.enable_validation,
             }
+            
+            if self.enable_validation:
+                stats["best_val_loss"] = self.best_val_loss
+                stats["final_val_loss"] = self.val_losses[-1] if self.val_losses else None
+                stats["val_losses"] = self.val_losses
+                stats["val_step_numbers"] = self.val_step_numbers
+            
             self._save_training_stats(stats)
             
             return stats
@@ -640,6 +803,7 @@ class LatentPRMTrainer:
         Creates a comprehensive loss curve plot showing:
         - Training loss at each optimization step
         - Average loss per epoch (as vertical lines)
+        - Validation loss (if enabled)
         
         The plot is saved to {output_dir}/img/loss_curve.png
         """
@@ -654,7 +818,9 @@ class LatentPRMTrainer:
                 logger.warning("[Trainer] No loss data to plot, skipping loss curve generation")
                 return
             
-            logger.info(f"[Trainer] Plotting loss curve with {len(self.step_losses)} step losses and {len(self.epoch_losses)} epoch losses")
+            logger.info(f"[Trainer] Plotting loss curve with {len(self.step_losses)} step losses, "
+                       f"{len(self.epoch_losses)} epoch losses" +
+                       (f", and {len(self.val_losses)} validation losses" if self.enable_validation else ""))
             
             # Create figure with high DPI for better quality
             fig, ax = plt.subplots(figsize=(12, 6), dpi=100)
@@ -665,6 +831,17 @@ class LatentPRMTrainer:
                    color='#2E86AB', 
                    linewidth=1.5, 
                    alpha=0.7)
+            
+            # Plot validation loss if enabled
+            if self.enable_validation and self.val_losses:
+                ax.plot(self.val_step_numbers, self.val_losses,
+                       label='Validation Loss',
+                       color='#C73E1D',
+                       linewidth=2.0,
+                       alpha=0.9,
+                       marker='o',
+                       markersize=5)
+                logger.debug(f"[Trainer] Plotted {len(self.val_losses)} validation points")
             
             # Calculate and plot epoch boundaries and average losses
             steps_per_epoch = len(self.dataloader) // self.gradient_accumulation_steps
@@ -691,10 +868,12 @@ class LatentPRMTrainer:
             # Customize plot
             ax.set_xlabel('Training Step', fontsize=12, fontweight='bold')
             ax.set_ylabel('Loss (MSE)', fontsize=12, fontweight='bold')
-            ax.set_title('Training Loss Curve - Latent PRM Fine-tuning', 
-                        fontsize=14, 
-                        fontweight='bold',
-                        pad=20)
+            
+            title = 'Training Loss Curve - Latent PRM Fine-tuning'
+            if self.enable_validation:
+                title += ' (with Validation)'
+            ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+            
             ax.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
             ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
             
@@ -702,9 +881,18 @@ class LatentPRMTrainer:
             stats_text = (
                 f'Total Steps: {self.global_step}\n'
                 f'Epochs: {self.num_epochs}\n'
-                f'Best Loss: {self.best_loss:.4f}\n'
-                f'Final Loss: {self.epoch_losses[-1]:.4f}'
             )
+            
+            if self.enable_validation:
+                stats_text += (
+                    f'Best Val Loss: {self.best_val_loss:.4f}\n'
+                    f'Final Val Loss: {self.val_losses[-1]:.4f}\n' if self.val_losses else ''
+                )
+            else:
+                stats_text += f'Best Loss: {self.best_loss:.4f}\n'
+            
+            stats_text += f'Final Train Loss: {self.epoch_losses[-1]:.4f}'
+            
             ax.text(0.02, 0.98, stats_text,
                    transform=ax.transAxes,
                    fontsize=9,
@@ -720,9 +908,14 @@ class LatentPRMTrainer:
             plt.close(fig)
             
             logger.info(f"[Trainer] ✓ Loss curve saved to: {output_path}")
-            logger.debug(f"[Trainer] Loss curve statistics - Min: {min(self.step_losses):.4f}, "
+            logger.debug(f"[Trainer] Training loss statistics - Min: {min(self.step_losses):.4f}, "
                         f"Max: {max(self.step_losses):.4f}, "
                         f"Mean: {sum(self.step_losses)/len(self.step_losses):.4f}")
+            
+            if self.enable_validation and self.val_losses:
+                logger.debug(f"[Trainer] Validation loss statistics - Min: {min(self.val_losses):.4f}, "
+                            f"Max: {max(self.val_losses):.4f}, "
+                            f"Mean: {sum(self.val_losses)/len(self.val_losses):.4f}")
             
         except Exception as e:
             logger.error(f"[Trainer] Failed to generate loss curve: {e}", exc_info=True)
@@ -775,6 +968,14 @@ def main():
                        help="Steps to accumulate gradients")
     parser.add_argument("--max_grad_norm", type=float, default=1.0,
                        help="Maximum gradient norm for clipping")
+    
+    # Validation configuration
+    parser.add_argument("--enable_validation", action="store_true",
+                       help="Enable validation set for evaluation")
+    parser.add_argument("--val_size", type=float, default=0.1,
+                       help="Validation set size (ratio if < 1.0, count if >= 1)")
+    parser.add_argument("--val_steps", type=int, default=100,
+                       help="Run validation every N steps")
     
     # Logging and checkpointing
     parser.add_argument("--save_steps", type=int, default=100,
@@ -849,6 +1050,9 @@ def main():
         device=args.device,
         mixed_precision=not args.no_mixed_precision,
         save_checkpoints=not args.no_save_checkpoints,
+        enable_validation=args.enable_validation,
+        val_size=args.val_size,
+        val_steps=args.val_steps,
         seed=args.seed
     )
     
