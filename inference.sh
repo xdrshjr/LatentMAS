@@ -40,8 +40,9 @@ python run.py \
   --generate_bs 1 \
   --latent_steps 3 \
   --num_paths 30 \
+  --num_parent_paths 10 \
   --diversity_strategy 'temperature' \
-  --temperature 0.5 \
+  --temperature 0.8 \
   --top_p 0.95 \
   --enable_branching \
   --enable_merging \

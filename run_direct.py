@@ -280,7 +280,7 @@ def main_direct(data_path: Optional[str] = None):
     args_dict = {
         # Core parameters
         "method": "latent_mas_multipath",  # Options: "baseline", "text_mas", "latent_mas", "latent_mas_multipath"
-        "model_name": "/root/autodl-fs/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
+        "model_name": "/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",  # Options: "Qwen/Qwen3-4B", "Qwen/Qwen3-14B"
         "max_samples": 20,  # Number of questions to process
         "task": "gsm8k",  # Task name (not used in custom mode, but required)
         "prompt": "sequential",  # Options: "sequential", "hierarchical"
@@ -288,9 +288,9 @@ def main_direct(data_path: Optional[str] = None):
         "split": "test",  # Split name (not used in custom mode, but required)
         
         # Generation parameters
-        "max_new_tokens": 4096,  # Maximum tokens to generate
-        "latent_steps": 2,  # Number of latent steps (for latent_mas and latent_mas_multipath)
-        "temperature": 1.5,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
+        "max_new_tokens": 2048,  # Maximum tokens to generate
+        "latent_steps": 3,  # Number of latent steps (for latent_mas and latent_mas_multipath)
+        "temperature": 0.5,  # Baseline temperature, [base_temperature - 0.3, base_temperature + 0.3] for diversity)
         "top_p": 0.95,  # Top-p sampling parameter
         "generate_bs": 1,  # Batch size for generation
         
@@ -300,10 +300,11 @@ def main_direct(data_path: Optional[str] = None):
         "latent_space_realign": True,  # Latent space realignment
         
         # Multi-path specific parameters (for latent_mas_multipath)
-        "num_paths": 50,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
+        "num_paths": 30,  # Number of parallel reasoning paths (3-10 recommended, more=slower but potentially better)
+        "num_parent_paths": 10,  # Number of top-scoring parent paths to use for next agent (default: 5)
         "enable_branching": True,  # Enable adaptive branching based on uncertainty
         "enable_merging": False,  # Enable path merging for efficiency (reduces redundant computation)
-        "pruning_strategy": "topk",  # Options: "topk", "adaptive", "diversity", "budget"
+        "pruning_strategy": "adaptive",  # Options: "topk", "adaptive", "diversity", "budget"
                                          # - "topk": Keep top-k paths by score (simple, fast)
                                          # - "adaptive": Adjust pruning rate by progress (recommended)
                                          # - "diversity": Balance score and diversity (good for exploration)

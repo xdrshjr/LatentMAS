@@ -1217,130 +1217,127 @@ class LatentConsistencyScorer(BaseScorer):
         return float(max(0.0, min(1.0, score)))
 
     def score_individual_paths(self, path_states: List[Any], **kwargs) -> List[float]:
-        """为每个路径计算一致性分数(基于成对相似度的矩阵运算)
+        """为每个路径计算一致性分数 (Self-Consistency Score)
 
-        Computes consistency scores for each path based on its average similarity
-        to other paths. Higher scores indicate paths that are more consistent
-        with the ensemble.
+        原理：
+        计算每个路径与其他所有路径的平均相似度。
+        分数越高，代表该路径越接近“共识”（即多数派答案）。
+        这直接反映了 Self-Consistency 的核心假设：真理通常位于潜在空间的稠密区域。
 
         Args:
             path_states: List of path states
             **kwargs: Additional arguments
 
         Returns:
-            List of consistency scores for each path (0-1, higher = more consistent)
+            List of consistency scores (0-1, raw similarity, higher = more consistent)
         """
-        logger.debug(f"[LatentConsistencyScorer] Computing individual path scores for {len(path_states)} paths")
+        logger.debug(f"[LatentConsistencyScorer] Computing SC scores for {len(path_states)} paths")
 
         latent_vectors = []
         valid_indices = []
 
+        # 1. 提取向量
         for i, path_state in enumerate(path_states):
             vec = self._extract_latent_representation(path_state)
             if vec is not None:
+                # 确保向量是 float 类型且在正确的设备上
+                if not isinstance(vec, torch.Tensor):
+                    vec = torch.tensor(vec).float()
                 latent_vectors.append(vec)
                 valid_indices.append(i)
 
+                # 简单诊断（可选）
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"[LatentConsistencyScorer] Path {i}: norm={torch.norm(vec).item():.4f}")
+
+        # 边界情况处理：向量不足
         if len(latent_vectors) < 2:
-            logger.info(f"[LatentConsistencyScorer] Insufficient vectors for individual scoring")
+            logger.info(f"[LatentConsistencyScorer] Insufficient vectors (<2). Returning default score 0.5.")
             return [0.5] * len(path_states)
 
-        # 将所有向量堆叠成矩阵 [N, D]
-        X = torch.stack(latent_vectors).float()  # shape: [N, D]
+        # 2. 堆叠矩阵 [N, D]
+        # 确保所有向量在同一设备
+        device = latent_vectors[0].device
+        X = torch.stack(latent_vectors).to(device).float()
         n_paths = X.shape[0]
 
-        logger.debug(f"[LatentConsistencyScorer] Computing pairwise similarity matrix for {n_paths} paths")
+        logger.debug(
+            f"[LatentConsistencyScorer] Computing pairwise matrix for {n_paths} paths using {self.similarity_metric}")
 
-        # 根据度量类型计算成对相似度矩阵
+        # 3. 计算成对相似度矩阵
         if self.similarity_metric == 'cosine':
-            # 余弦相似度矩阵计算
-            # cosine_sim(i,j) = (x_i · x_j) / (||x_i|| * ||x_j||)
-            X_norm = F.normalize(X, p=2, dim=1)  # L2 归一化
-            similarity_matrix = torch.mm(X_norm, X_norm.t())  # [N, N]
-            # 映射到 [0, 1]
+            # Cosine: 范围 [-1, 1], 归一化后通常在 [0, 1] 之间
+            X_norm = F.normalize(X, p=2, dim=1)
+            similarity_matrix = torch.mm(X_norm, X_norm.t())
+            # 映射 [-1, 1] -> [0, 1] 以便于直观理解 (可选，取决于 embedding 空间特性)
+            # 对于许多现代 embedding，负相关性很少见，通常直接用 raw cosine 也可以
             similarity_matrix = (similarity_matrix + 1.0) / 2.0
 
         elif self.similarity_metric == 'kl_divergence':
-            # KL 散度矩阵计算（使用对称 KL 散度）
             eps = 1e-10
+            P = F.softmax(X, dim=1) + eps
+            P = P / P.sum(dim=1, keepdim=True)
+            log_P = torch.log(P)
 
-            # 将所有向量转换为概率分布
-            P = F.softmax(X, dim=1) + eps  # [N, D]
-            P = P / P.sum(dim=1, keepdim=True)  # 重新归一化
+            P_expanded = P.unsqueeze(1)
+            log_P_expanded = log_P.unsqueeze(1)
+            log_Q_expanded = log_P.unsqueeze(0)
+            Q_expanded = P.unsqueeze(0)
 
-            # 计算对称 KL 散度：(KL(P||Q) + KL(Q||P)) / 2
-            # 使用 log 空间计算以提高数值稳定性
-            log_P = torch.log(P)  # [N, D]
-
-            # 扩展维度用于广播
-            P_expanded = P.unsqueeze(1)  # [N, 1, D]
-            log_P_expanded = log_P.unsqueeze(1)  # [N, 1, D]
-            log_Q_expanded = log_P.unsqueeze(0)  # [1, N, D]
-            Q_expanded = P.unsqueeze(0)  # [1, N, D]
-
-            # KL(P||Q) = sum(P * log(P/Q))
-            kl_pq = torch.sum(P_expanded * (log_P_expanded - log_Q_expanded), dim=2)  # [N, N]
-            # KL(Q||P) = sum(Q * log(Q/P))
-            kl_qp = torch.sum(Q_expanded * (log_Q_expanded - log_P_expanded), dim=2)  # [N, N]
-
-            # 对称 KL 散度
+            kl_pq = torch.sum(P_expanded * (log_P_expanded - log_Q_expanded), dim=2)
+            kl_qp = torch.sum(Q_expanded * (log_Q_expanded - log_P_expanded), dim=2)
             symmetric_kl = (kl_pq + kl_qp) / 2.0
 
-            # 转换为相似度分数
-            similarity_matrix = torch.exp(-symmetric_kl)  # [N, N]
+            # 转换为相似度: exp(-KL)
+            similarity_matrix = torch.exp(-symmetric_kl)
 
-        elif self.similarity_metric == 'euclidean' or self.similarity_metric == 'l2':
-            # 欧氏距离矩阵计算
-            # 使用 PyTorch 的 cdist 函数（更高效且数值稳定）
-            distance_matrix = torch.cdist(X, X, p=2)  # [N, N]
-
-            # 转换为相似度分数
-            similarity_matrix = 1.0 / (1.0 + distance_matrix)  # [N, N]
+        elif self.similarity_metric in ['euclidean', 'l2']:
+            distance_matrix = torch.cdist(X, X, p=2)
+            # 距离转相似度: 1 / (1 + d)
+            similarity_matrix = 1.0 / (1.0 + distance_matrix)
 
         else:
-            logger.warning(f"[LatentConsistencyScorer] Unknown metric '{self.similarity_metric}', using default")
+            logger.warning(f"Unknown metric '{self.similarity_metric}', default to 0.5")
             return [0.5] * len(path_states)
 
-        # 屏蔽对角线（不与自己比较）
-        mask = torch.eye(n_paths, device=similarity_matrix.device, dtype=torch.bool)
+        # 4. 屏蔽对角线并计算平均值
+        # Self-Consistency 核心：一个路径的分数 = 它与其他所有路径相似度的均值
+        mask = torch.eye(n_paths, device=device, dtype=torch.bool)
         similarity_matrix_masked = similarity_matrix.clone()
         similarity_matrix_masked[mask] = 0.0
 
-        # 计算每个路径与其他路径的平均相似度
+        # Sum / (N-1)
         avg_similarities = similarity_matrix_masked.sum(dim=1) / (n_paths - 1)
 
-        # 转换为 numpy 数组
-        diversity_scores = avg_similarities.cpu().float().numpy()
+        # 5. 异常值检测 (仅记录，不修改数值)
+        # 这一点对 SC 很重要：不要人为提高差生的分数
+        with torch.no_grad():
+            mean_sim = avg_similarities.mean().item()
+            std_sim = avg_similarities.std().item()
 
-        # 归一化到 [0, 1] 并增强区分度
-        score_range = diversity_scores.max() - diversity_scores.min()
+            # 检测严重偏离群体的路径 (低于 mean - 2*std)
+            # 这些通常是幻觉路径
+            outliers = avg_similarities < (mean_sim - 2 * std_sim)
 
-        if score_range > 1e-6:
-            # Min-max 归一化
-            diversity_scores = (diversity_scores - diversity_scores.min()) / score_range
+            if outliers.any():
+                outlier_indices = torch.where(outliers)[0].tolist()
+                logger.warning(f"[LatentConsistencyScorer] Detected {len(outlier_indices)} LOW-consistency paths "
+                               f"(Score < {mean_sim - 2 * std_sim:.4f}). These will naturally get low scores.")
+                for idx in outlier_indices:
+                    logger.debug(f"  -> Path {valid_indices[idx]} score: {avg_similarities[idx].item():.4f}")
 
-            # 可选：应用非线性变换增强差异（取消注释以启用）
-            # diversity_scores = np.power(diversity_scores, 0.5)  # 平方根拉开差距
+        # 6. 生成最终分数
+        # 直接使用原始相似度均值，不进行 Min-Max 归一化
+        consistency_scores_numpy = avg_similarities.cpu().float().numpy()
 
-            logger.info(f"[LatentConsistencyScorer] Score range after normalization: "
-                        f"[{diversity_scores.min():.4f}, {diversity_scores.max():.4f}]")
-        else:
-            # 路径缺乏多样性
-            logger.warning(f"[LatentConsistencyScorer] CRITICAL: Very low diversity detected! "
-                           f"Raw score range: {score_range:.8f}")
-            logger.warning(f"[LatentConsistencyScorer] All paths are nearly identical - "
-                           f"diversity strategy may have failed")
-            diversity_scores = np.ones_like(diversity_scores) * 0.5
+        # [可选优化] 区分度增强 (Sharpening)
+        # 如果你觉得分数太接近（例如都在 0.85~0.88），可以应用幂函数拉开差距
+        # 这保留了单调性，但放大了差异。SC 中常用 temperature softmax，这里用平方是一种简化替代。
+        # consistency_scores_numpy = np.power(consistency_scores_numpy, 3)
 
-        individual_scores_valid = diversity_scores.tolist()
+        individual_scores_valid = consistency_scores_numpy.tolist()
 
-        # 详细日志
-        for i, score in enumerate(individual_scores_valid):
-            logger.debug(f"[LatentConsistencyScorer] Path {valid_indices[i]}: "
-                         f"avg_similarity={avg_similarities[i].item():.6f}, "
-                         f"normalized_score={score:.4f}")
-
-        # 构建完整分数列表
+        # 7. 映射回原始列表
         individual_scores = []
         valid_idx = 0
         for i in range(len(path_states)):
@@ -1348,31 +1345,20 @@ class LatentConsistencyScorer(BaseScorer):
                 individual_scores.append(individual_scores_valid[valid_idx])
                 valid_idx += 1
             else:
-                individual_scores.append(0.5)
+                # 无效路径 (提取不出向量) 给予最低分 0.0
+                individual_scores.append(0.0)
 
-        # 统计信息
-        logger.info(f"[LatentConsistencyScorer] Path scoring complete - "
-                    f"metric: {self.similarity_metric}, "
-                    f"paths: {len(individual_scores_valid)}")
-        logger.info(f"[LatentConsistencyScorer] Score statistics - "
-                    f"min: {min(individual_scores_valid):.4f}, "
-                    f"max: {max(individual_scores_valid):.4f}, "
-                    f"mean: {np.mean(individual_scores_valid):.4f}, "
-                    f"std: {np.std(individual_scores_valid):.4f}")
+        # 统计日志
+        logger.info(f"[LatentConsistencyScorer] Final SC Scores - "
+                    f"Mean: {np.mean(individual_scores_valid):.4f}, "
+                    f"Std: {np.std(individual_scores_valid):.4f}, "
+                    f"Min: {min(individual_scores_valid):.4f}, "
+                    f"Max: {max(individual_scores_valid):.4f}")
 
-        # Explicitly delete large temporary tensors to free GPU memory
-        logger.debug(f"[LatentConsistencyScorer] Cleaning up temporary tensors from scoring")
-        del X, similarity_matrix, similarity_matrix_masked, avg_similarities
-        
-        # Also clean up latent vectors list
-        del latent_vectors, diversity_scores
-        
-        # Force GPU memory cleanup and synchronization
+        # 8. 显存清理
+        del X, similarity_matrix, similarity_matrix_masked, avg_similarities, latent_vectors
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-            gpu_mem_after = torch.cuda.memory_allocated() / 1024**3
-            logger.debug(f"[LatentConsistencyScorer] GPU memory after cleanup: {gpu_mem_after:.2f}GB")
 
         return individual_scores
 

@@ -599,7 +599,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                 wrapped_ids = wrapped_encoded["input_ids"].to(self.model.device)
                 wrapped_mask = wrapped_encoded["attention_mask"].to(self.model.device)
                 
-                    # Process each item in batch
+                # Process each item in batch
                 for batch_idx in range(batch_size):
                     logger.info(f"[{agent.name}] Processing item {batch_idx + 1}/{batch_size}")
                     logger.info(f"[{agent.name}] Question: {items[batch_idx]['question']}")
@@ -1286,9 +1286,13 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             best_answer = max(answer_votes.items(), key=lambda x: x[1])[0]
                             final_texts[batch_idx] = best_answer
 
-                            logger.info(f"[{agent.name}] Selected final answer: {best_answer}")
+                            if len(best_answer) <= 200:
+                                best_answer_display = best_answer
+                            else:
+                                best_answer_display = f"{best_answer[:100]}...{best_answer[-100:]}"
+                            logger.info(f"[{agent.name}] Selected final answer: {best_answer_display}")
                             logger.info(f"[{agent.name}] Winning vote weight: {answer_votes[best_answer]:.4f}")
-                    
+
                     # Log GPU memory after judger processing
                     if torch.cuda.is_available():
                         gpu_mem_judger_end = torch.cuda.memory_allocated() / 1024**3
