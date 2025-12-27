@@ -22,8 +22,8 @@
 
 
 # ==================================Single-GPU Configuration==================================
-#export CUDA_VISIBLE_DEVICES=0
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
+#export CUDA_VISIBLE_DEVICES=1
 ENABLE_MULTI_GPU=false
 
 # ==================================Multi-GPU Configuration==================================
@@ -36,30 +36,30 @@ ENABLE_MULTI_GPU=false
 # ==================================Cloud Compute==================================
 # These settings are used when ENABLE_MULTI_GPU=false
 
-#export https_proxy=http://127.0.0.1:7890;
-#export http_proxy=http://127.0.0.1:7890;
-#export all_proxy=socks5://127.0.0.1:7890;
-#export HF_HOME=/autodl-fs/data/models
-#MODEL_NAME="/autodl-fs/data/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
+export https_proxy=http://127.0.0.1:7890;
+export http_proxy=http://127.0.0.1:7890;
+export all_proxy=socks5://127.0.0.1:7890;
+export HF_HOME=/autodl-fs/data/models
+MODEL_NAME="/autodl-fs/data/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
 
 # ==================================Local Compute==================================
 # Uncomment these for local development (when ENABLE_MULTI_GPU=false)
 
-export https_proxy=http://127.0.0.1:7897
-export http_proxy=http://127.0.0.1:7897
-export all_proxy=socks5://127.0.0.1:7897
-export HF_HOME=/mnt/mydisk/models
-MODEL_NAME="/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
+#export https_proxy=http://127.0.0.1:7897
+#export http_proxy=http://127.0.0.1:7897
+#export all_proxy=socks5://127.0.0.1:7897
+#export HF_HOME=/mnt/mydisk/models
+#MODEL_NAME="/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
 
 # ==================================Configuration==================================
 # Dataset configuration
 TASK="gsm8k"                    # Dataset to use (gsm8k, aime2024, etc.)
-MAX_SAMPLES=100                  # Number of questions to collect data for (-1 for all)
+MAX_SAMPLES=50                  # Number of questions to collect data for (-1 for all)
 SEED=42                         # Random seed for reproducibility
 
 # Model configuration
 MAX_NEW_TOKENS=2048             # Maximum tokens for generation
-TEMPERATURE=0.7                 # Baseline temperature for diversity
+TEMPERATURE=1.0                 # Baseline temperature for diversity
 TOP_P=0.95                      # Nucleus sampling parameter
 
 # Multi-path configuration (for data collection)

@@ -21,7 +21,7 @@ from .scoring_metrics import EnsembleScorer, SelfConsistencyScorer, PerplexitySc
 from .pruning_strategies import TopKPruning, AdaptivePruning, DiversityAwarePruning, BudgetBasedPruning
 from .path_merging import PathMerger, WeightedMergeStrategy, AverageMergeStrategy, PathSimilarityDetector
 from .diversity_strategies import HybridDiversityStrategy, TemperatureDiversityStrategy, NoiseDiversityStrategy
-from .latent_prm import LatentPRMDataCollector, PathTreeBuilder, PRMDataStorage, PRMScorer
+from .latent_prm import LatentPRMDataCollector, PathTreeBuilder, PathScoreBackpropagator, PRMDataStorage, PRMScorer
 from models import ModelWrapper, _past_length
 from prompts import build_agent_message_sequential_latent_mas, build_agent_message_hierarchical_latent_mas
 from utils import extract_gsm8k_answer, normalize_answer, extract_markdown_python_block, run_with_timeout
@@ -208,6 +208,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         # Initialize PRM data collection components (disabled by default)
         self.prm_data_collector = None
         self.prm_tree_builder = None
+        self.prm_backpropagator = None
         self.prm_data_storage = None
         self.prm_scorer = None
         self.collect_prm_data = False
@@ -243,17 +244,28 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         
         # Initialize PRM components
         logger.info("[LatentMASMultiPathMethod] Initializing PRM data collection components")
-        self.prm_data_collector = LatentPRMDataCollector(enabled=True)
-        logger.debug("[LatentMASMultiPathMethod] ✓ LatentPRMDataCollector initialized")
         
+        # NEW: Initialize PathScoreBackpropagator for per-batch PRM score computation
+        self.prm_backpropagator = PathScoreBackpropagator()
+        logger.info("[LatentMASMultiPathMethod] ✓ PathScoreBackpropagator initialized (per-batch scoring)")
+        
+        # Initialize LatentPRMDataCollector with backpropagator
+        self.prm_data_collector = LatentPRMDataCollector(
+            enabled=True,
+            backpropagator=self.prm_backpropagator
+        )
+        logger.info("[LatentMASMultiPathMethod] ✓ LatentPRMDataCollector initialized with backpropagator")
+        
+        # Keep PathTreeBuilder for backward compatibility (legacy)
         self.prm_tree_builder = PathTreeBuilder()
-        logger.debug("[LatentMASMultiPathMethod] ✓ PathTreeBuilder initialized")
+        logger.debug("[LatentMASMultiPathMethod] ✓ PathTreeBuilder initialized (legacy, not used)")
         
         self.prm_data_storage = PRMDataStorage(output_dir=output_dir)
         logger.debug("[LatentMASMultiPathMethod] ✓ PRMDataStorage initialized")
         
+        # Keep PRMScorer for backward compatibility (legacy)
         self.prm_scorer = PRMScorer(correct_score=1.0, incorrect_score=0.0)
-        logger.debug("[LatentMASMultiPathMethod] ✓ PRMScorer initialized")
+        logger.debug("[LatentMASMultiPathMethod] ✓ PRMScorer initialized (legacy, not used)")
         
         # Optionally disable pruning and merging for maximum path diversity
         if disable_pruning:
@@ -1144,7 +1156,13 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             answer = generated_batch[0].strip()
                             path_answers.append(answer)
                             path_scores.append(path.score)
-                            logger.info(f"[{agent.name}] Path {path.path_id} generated answer: {answer}")
+
+                            if len(answer) <= 200:
+                                answer_display = answer
+                            else:
+                                answer_display = f"{answer[:100]}...{answer[-100:]}"
+
+                            logger.info(f"[{agent.name}] Path {path.path_id} generated answer: {answer_display}")
                             logger.debug(f"[{agent.name}] Path {path.path_id} answer length: {len(answer)} chars")
                             
                             # Immediately clean up the new KV cache from generation to prevent accumulation
@@ -1161,7 +1179,13 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             
                             gold_answer = items[batch_idx].get("gold", "")
                             
-                            for path_idx, (path, raw_answer) in enumerate(zip(item_paths, path_answers)):
+                            # CRITICAL FIX: Create Judger layer path records
+                            # Previously, is_correct was stored in parent path metadata
+                            # Now we create new Judger paths as children of parent paths
+                            judger_paths_created = []
+                            judger_results = []  # Store (extracted_answer, is_correct) for each judger path
+                            
+                            for path_idx, (parent_path, raw_answer) in enumerate(zip(item_paths, path_answers)):
                                 # Extract and normalize answer based on task type
                                 extracted_answer, is_path_correct = self._verify_path_answer(
                                     raw_answer=raw_answer,
@@ -1170,29 +1194,71 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                                     item=items[batch_idx]
                                 )
                                 
-                                # Store individual path results in metadata for PRM scoring
-                                path.metadata['decoded_answer'] = raw_answer
-                                path.metadata['extracted_answer'] = extracted_answer
-                                path.metadata['is_correct'] = is_path_correct
+                                # Store result for later use
+                                judger_results.append((extracted_answer, is_path_correct))
+                                
+                                # Create a new Judger layer path as child of parent_path
+                                # Generate unique path ID for this Judger path
+                                judger_path_id = self.path_manager.next_path_id
+                                self.path_manager.next_path_id += 1
+                                
+                                # Judger paths don't generate new latent vectors, 
+                                # they just decode from parent's latent state
+                                # So we use parent's hidden states and empty latent history
+                                judger_latent_history = []  # Judger doesn't add new latent steps
+                                judger_hidden_states = parent_path.hidden_states  # Use parent's final state
+                                
+                                # Compute a simple score for the Judger path
+                                # Use parent's score as base (could be enhanced later)
+                                judger_score = parent_path.score
+                                
+                                # Create metadata for Judger path
+                                judger_metadata = {
+                                    'decoded_answer': raw_answer,
+                                    'extracted_answer': extracted_answer,
+                                    'is_correct': is_path_correct,
+                                    'parent_path_id': parent_path.path_id,
+                                    'gold_answer': gold_answer,
+                                }
+                                
+                                # Record the Judger path to data collector
+                                if self.prm_data_collector:
+                                    self.prm_data_collector.record_path(
+                                        path_id=judger_path_id,
+                                        agent_name=agent.name,
+                                        agent_idx=agent_idx,
+                                        parent_path_id=parent_path.path_id,
+                                        latent_history=judger_latent_history,
+                                        hidden_states=judger_hidden_states,
+                                        score=judger_score,
+                                        metadata=judger_metadata
+                                    )
+                                    judger_paths_created.append(judger_path_id)
+                                    logger.debug(f"[{agent.name}] Created Judger path {judger_path_id} "
+                                               f"as child of path {parent_path.path_id}")
                                 
                                 # Log individual path verification
-                                logger.info(f"[{agent.name}] Path {path.path_id} (#{path_idx + 1}/{len(item_paths)}):")
+                                logger.info(f"[{agent.name}] Path {parent_path.path_id} → Judger path {judger_path_id} "
+                                          f"(#{path_idx + 1}/{len(item_paths)}):")
                                 logger.info(f"  - Raw answer: {raw_answer[:100]}{'...' if len(raw_answer) > 100 else ''}")
                                 logger.info(f"  - Extracted: {extracted_answer}")
                                 logger.info(f"  - Gold: {gold_answer}")
                                 logger.info(f"  - Result: {'✓ CORRECT' if is_path_correct else '✗ INCORRECT'}")
-                                logger.debug(f"  - Original score: {path.score:.4f}")
+                                logger.debug(f"  - Parent score: {parent_path.score:.4f}")
+                            
+                            logger.info(f"[{agent.name}] Created {len(judger_paths_created)} Judger layer paths")
+                            logger.debug(f"[{agent.name}] Judger path IDs: {judger_paths_created}")
                             
                             logger.info("=" * 80)
                             
-                            # Count correct paths
-                            num_correct = sum(1 for p in item_paths if p.metadata.get('is_correct', False))
-                            logger.info(f"[{agent.name}] Path verification summary: {num_correct}/{len(item_paths)} paths correct")
-                            logger.info(f"[{agent.name}] Individual path accuracy: {num_correct / len(item_paths) * 100:.1f}%")
+                            # Count correct paths using judger_results
+                            num_correct = sum(1 for (_, is_correct) in judger_results if is_correct)
+                            logger.info(f"[{agent.name}] Path verification summary: {num_correct}/{len(judger_results)} paths correct")
+                            logger.info(f"[{agent.name}] Individual path accuracy: {num_correct / len(judger_results) * 100:.1f}%")
                             
                             # For final answer in PRM mode, use majority voting (but don't use it for scoring)
                             # This is just for reporting purposes
-                            correct_answers = [p.metadata['extracted_answer'] for p in item_paths if p.metadata.get('is_correct', False)]
+                            correct_answers = [extracted_answer for (extracted_answer, is_correct) in judger_results if is_correct]
                             if correct_answers:
                                 # Use the most common correct answer
                                 from collections import Counter
@@ -1202,7 +1268,7 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                             else:
                                 # No correct paths, use the answer from highest-scored path
                                 best_path_idx = path_scores.index(max(path_scores))
-                                final_texts[batch_idx] = item_paths[best_path_idx].metadata['extracted_answer']
+                                final_texts[batch_idx] = judger_results[best_path_idx][0]  # Use extracted_answer from judger_results
                                 logger.warning(f"[{agent.name}] No correct paths found, using answer from best-scored path")
                         
                         else:

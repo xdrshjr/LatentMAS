@@ -13,6 +13,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Forward declaration for type hint
+PathScoreBackpropagator = Any
+
 
 @dataclass
 class PathRecord:
@@ -76,21 +79,33 @@ class LatentPRMDataCollector:
         current_question: Current question being processed
         path_records: Dictionary mapping path_id to PathRecord
         question_records: List of completed question records
+        backpropagator: PathScoreBackpropagator for computing PRM scores
     """
     
-    def __init__(self, enabled: bool = False):
+    def __init__(
+        self,
+        enabled: bool = False,
+        backpropagator: Optional[PathScoreBackpropagator] = None
+    ):
         """Initialize the data collector.
         
         Args:
             enabled: Whether to enable data collection
+            backpropagator: Optional PathScoreBackpropagator for computing PRM scores
         """
         self.enabled = enabled
         self.current_question: Optional[QuestionRecord] = None
         self.path_records: Dict[int, PathRecord] = {}
         self.question_records: List[QuestionRecord] = []
+        self.backpropagator = backpropagator
         
         if self.enabled:
             logger.info("[LatentPRMDataCollector] Data collection ENABLED")
+            if self.backpropagator:
+                logger.info("[LatentPRMDataCollector] PathScoreBackpropagator ENABLED")
+            else:
+                logger.warning("[LatentPRMDataCollector] PathScoreBackpropagator NOT provided - "
+                             "PRM scores will not be computed per batch")
         else:
             logger.debug("[LatentPRMDataCollector] Data collection DISABLED")
     
@@ -196,6 +211,12 @@ class LatentPRMDataCollector:
     ) -> None:
         """Finish collecting data for the current question.
         
+        This method now:
+        1. Collects all path data
+        2. IMMEDIATELY builds tree structure and computes PRM scores
+        3. Prints tree to console
+        4. Stores tree structure with question record
+        
         Args:
             final_answer: Final predicted answer (for reporting, may be aggregated)
             is_correct: Whether the final answer is correct (for reporting, may be aggregated)
@@ -215,7 +236,7 @@ class LatentPRMDataCollector:
                 path_is_correct = path_record.metadata['is_correct']
                 logger.debug(f"[DataCollector] Path {path_id} individual correctness: {path_is_correct}")
                 # Store in path record for later use (not just metadata)
-                # This will be used by PathTreeBuilder for PRM scoring
+                # This will be used by PathScoreBackpropagator for PRM scoring
             else:
                 logger.debug(f"[DataCollector] Path {path_id} has no individual correctness (normal inference mode)")
         
@@ -239,6 +260,42 @@ class LatentPRMDataCollector:
         
         # Log detailed path information with traversal visualization
         self._log_detailed_path_info()
+        
+        # ===================================================================
+        # CRITICAL: Build tree and compute PRM scores IMMEDIATELY after batch
+        # This is the fix for the issue described in the requirements
+        # ===================================================================
+        if self.backpropagator and num_paths > 0:
+            logger.info("=" * 80)
+            logger.info("[DataCollector] Computing PRM scores via backward propagation")
+            logger.info("[DataCollector] This happens IMMEDIATELY after batch completion")
+            logger.info("=" * 80)
+            
+            try:
+                # Build tree and compute PRM scores
+                tree_structure = self.backpropagator.build_and_score_tree(
+                    path_records=self.current_question.paths,
+                    question_id=self.current_question.question_id,
+                    question_text=self.current_question.question
+                )
+                
+                # Store tree structure in question record
+                self.current_question.path_tree = tree_structure
+                
+                logger.info("[DataCollector] PRM scores computed and stored successfully")
+                logger.debug(f"[DataCollector] Tree structure: {tree_structure['num_nodes']} nodes, "
+                           f"{tree_structure['num_edges']} edges, max_depth={tree_structure['max_depth']}")
+                
+            except Exception as e:
+                logger.error(f"[DataCollector] Failed to compute PRM scores: {e}", exc_info=True)
+                logger.warning("[DataCollector] Continuing without PRM scores for this question")
+                self.current_question.path_tree = None
+        else:
+            if not self.backpropagator:
+                logger.warning("[DataCollector] No backpropagator configured - skipping PRM score computation")
+            if num_paths == 0:
+                logger.warning("[DataCollector] No paths collected - skipping PRM score computation")
+            self.current_question.path_tree = None
         
         # Add to question records
         self.question_records.append(self.current_question)

@@ -1258,30 +1258,42 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
                 logger.info(f"  - Accuracy: {stats.get('accuracy', 0.0):.4f}")
                 logger.info(f"  - Avg paths per question: {stats.get('avg_paths_per_question', 0.0):.2f}")
                 
-                # Build tree structures for each question
-                logger.info("[PRM Data Collection] Building tree structures for collected data")
+                # Extract tree structures from question records
+                # NOTE: Tree structures and PRM scores are now computed PER-BATCH
+                # in the data collector's finish_question() method via PathScoreBackpropagator
+                logger.info("[PRM Data Collection] Extracting tree structures from question records")
+                logger.info("[PRM Data Collection] NOTE: Trees were built per-batch, not here")
                 tree_structures = []
                 for idx, question_record in enumerate(collected_data):
-                    logger.debug(f"[PRM Data Collection] Building tree for question {idx + 1}/{len(collected_data)}")
-                    logger.debug(f"[PRM Data Collection] Question has {len(question_record.paths)} paths")
-                    
-                    tree_structure = method.prm_tree_builder.build_tree(
-                        path_records=question_record.paths,
-                        is_correct=question_record.is_correct
-                    )
-                    tree_structures.append(tree_structure)
-                    
-                    # Log tree structure details
-                    num_nodes = tree_structure.get('num_nodes', 0)
-                    num_edges = tree_structure.get('num_edges', 0)
-                    max_depth = tree_structure.get('max_depth', 0)
-                    logger.debug(f"[PRM Data Collection] Tree built: {num_nodes} nodes, "
-                               f"{num_edges} edges, max_depth={max_depth}")
-                    
-                    if num_nodes == 0:
-                        logger.warning(f"[PRM Data Collection] Question {idx + 1} has no paths - tree is empty")
+                    if question_record.path_tree is not None:
+                        tree_structures.append(question_record.path_tree)
+                        logger.debug(f"[PRM Data Collection] Question {idx + 1}: "
+                                   f"Tree with {question_record.path_tree.get('num_nodes', 0)} nodes extracted")
+                    else:
+                        # Fallback: create empty tree structure if none was computed
+                        logger.warning(f"[PRM Data Collection] Question {idx + 1}: No tree structure found")
+                        tree_structures.append({
+                            "nodes": [],
+                            "edges": [],
+                            "root_ids": [],
+                            "num_nodes": 0,
+                            "num_edges": 0,
+                            "max_depth": 0
+                        })
                 
-                logger.info(f"[PRM Data Collection] Built {len(tree_structures)} tree structures")
+                logger.info(f"[PRM Data Collection] Extracted {len(tree_structures)} tree structures")
+                
+                # Verify PRM scores are present
+                num_with_prm_scores = 0
+                for question_record in collected_data:
+                    paths_with_scores = sum(1 for p in question_record.paths if p.prm_score is not None)
+                    if paths_with_scores > 0:
+                        num_with_prm_scores += 1
+                        logger.debug(f"[PRM Data Collection] Question {question_record.question_id}: "
+                                   f"{paths_with_scores}/{len(question_record.paths)} paths have PRM scores")
+                
+                logger.info(f"[PRM Data Collection] {num_with_prm_scores}/{len(collected_data)} "
+                          f"questions have paths with PRM scores")
                 
                 # Save data using PRMDataStorage
                 logger.info("[PRM Data Collection] Saving data to disk")

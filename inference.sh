@@ -1,19 +1,19 @@
 
 # ==================================Cloud Compute==================================
-export CUDA_VISIBLE_DEVICES=0
-export https_proxy=http://127.0.0.1:7890;
-export http_proxy=http://127.0.0.1:7890;
-export all_proxy=socks5://127.0.0.1:7890;
-export HF_HOME=/autodl-fs/data/models
-MODEL_NAME="/autodl-fs/data/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
+#export CUDA_VISIBLE_DEVICES=0
+#export https_proxy=http://127.0.0.1:7890;
+#export http_proxy=http://127.0.0.1:7890;
+#export all_proxy=socks5://127.0.0.1:7890;
+#export HF_HOME=/autodl-fs/data/models
+#MODEL_NAME="/autodl-fs/data/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
 
 # ==================================Local Compute==================================
-#export CUDA_VISIBLE_DEVICES=1
-#export https_proxy=http://127.0.0.1:7897
-#export http_proxy=http://127.0.0.1:7897
-#export all_proxy=socks5://127.0.0.1:7897
-#export HF_HOME=/mnt/mydisk/models
-#MODEL_NAME="/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
+export CUDA_VISIBLE_DEVICES=1
+export https_proxy=http://127.0.0.1:7897
+export http_proxy=http://127.0.0.1:7897
+export all_proxy=socks5://127.0.0.1:7897
+export HF_HOME=/mnt/mydisk/models
+MODEL_NAME="/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
 
 # ==================================Basic latent reasoning==================================
 #python run.py \
@@ -30,16 +30,16 @@ MODEL_NAME="/autodl-fs/data/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899d
 
 # ==================================MultiPATH conservative latent reasoning==================================
 python run.py \
-  --method latent_mas \
+  --method latent_mas_multipath \
   --model_name ${MODEL_NAME} \
   --task gsm8k \
   --prompt sequential \
-  --max_samples -1 \
+  --max_samples 30 \
   --max_new_tokens 2048 \
   --seed 42 \
   --generate_bs 1 \
-  --latent_steps 2 \
-  --num_paths 10 \
+  --latent_steps 3 \
+  --num_paths 30 \
   --diversity_strategy 'temperature' \
   --temperature 0.5 \
   --top_p 0.95 \
