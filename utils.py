@@ -531,7 +531,7 @@ def save_question_answer_record(
     question: str,
     prediction: Optional[str],
     gold: Optional[str],
-    correct: bool,
+    correct: Optional[bool],
     additional_info: Optional[Dict[str, Any]] = None
 ) -> None:
     """Save a single question-answer record to the output file.
@@ -545,7 +545,7 @@ def save_question_answer_record(
         question: The question text
         prediction: The predicted answer
         gold: The gold/correct answer
-        correct: Whether the prediction was correct
+        correct: Whether the prediction was correct (None if not evaluated)
         additional_info: Optional dictionary with additional information to include
     """
     try:
@@ -555,7 +555,7 @@ def save_question_answer_record(
             'question': question.strip() if question else "",
             'prediction': str(prediction) if prediction is not None else None,
             'gold': str(gold) if gold is not None else None,
-            'correct': correct,
+            'correct': correct,  # Can be None for tasks without evaluation
         }
         
         # Add any additional information

@@ -44,7 +44,7 @@ Now, output your refined plan below:
 """
 
     elif role == "judger":
-        if args.task in ['gsm8k', 'aime2024', 'aime2025']:
+        if args.task in ['gsm8k', 'aime2024', 'aime2025', 'cot_fact_wiki']:
             user_prompt = f"""
 Target Question: {question}
 
@@ -119,7 +119,7 @@ def build_agent_message_hierarchical_latent_mas(role: str, question: str, contex
     assert method in ["latent_mas", "latent_mas_multipath"], "this prompt only for latent_mas method"
     assert "qwen" in args.model_name.lower(), "this prompt only for qwen models"
 
-    if args.task in ['gsm8k', 'aime2024', 'aime2025']:
+    if args.task in ['gsm8k', 'aime2024', 'aime2025', 'cot_fact_wiki']:
         if role == "planner":
             user_content = f"""
 You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
@@ -407,7 +407,7 @@ Now, output your refined plan below:
     elif role == "judger":
         task = getattr(args, "task", None)
 
-        if task in ["gsm8k", "aime2024", "aime2025"]:
+        if task in ["gsm8k", "aime2024", "aime2025", "cot_fact_wiki"]:
             user_content = f"""
 Target Question: {question}
 
@@ -510,7 +510,7 @@ def build_agent_messages_hierarchical_text_mas(role: str, question: str, context
     assert method in ["text_mas"], "this prompt only for text_mas method"
     assert "qwen" in args.model_name.lower(), "this prompt only for qwen models"
 
-    if args.task in ['gsm8k', 'aime2024', 'aime2025']:
+    if args.task in ['gsm8k', 'aime2024', 'aime2025', 'cot_fact_wiki']:
         if role == "planner":
             user_content = f"""
 You are a math agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
@@ -694,7 +694,7 @@ def build_agent_messages_single_agent(question: str, args=None):
 
     task = args.task
 
-    if task in ["gsm8k", "aime2024", "aime2025"]:
+    if task in ["gsm8k", "aime2024", "aime2025", "cot_fact_wiki"]:
         user_content = f"""
 Target Question: {question}
 

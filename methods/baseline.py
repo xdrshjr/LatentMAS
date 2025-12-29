@@ -87,6 +87,25 @@ class BaselineMethod:
                     ok = False
                     error_msg = f'Value error in parsing answer. Pred: {pred}, Gold: {gold}'
 
+            elif self.task == "cot_fact_wiki":
+                # Fact-checking task: extract answer from \boxed{...} format
+                # Answers are text-based descriptions, not just numbers
+                import re
+                boxes = re.findall(r"\\boxed\{([^}]*)\}", generated_text)
+                if boxes:
+                    pred = normalize_answer(boxes[-1].strip())
+                else:
+                    # Fallback: try to extract using gsm8k method
+                    pred = normalize_answer(extract_gsm8k_answer(generated_text))
+                
+                gold = item.get("gold", "")
+                # For text-based answers, check if key phrases match
+                # Use normalized comparison
+                ok = (pred == gold) if (pred and gold) else False
+                error_msg = None
+                
+                logger.debug(f"Fact-checking evaluation: pred='{pred[:100]}...', gold='{gold[:100]}...', match={ok}")
+
             else:
                 pred = normalize_answer(extract_gsm8k_answer(generated_text))
                 gold = item.get("gold", "")

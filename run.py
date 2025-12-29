@@ -14,7 +14,8 @@ from data import (
     load_gpqa_diamond,
     load_mbppplus,
     load_humanevalplus,
-    load_medqa
+    load_medqa,
+    load_cot_fact_wiki
 )
 from methods.baseline import BaselineMethod
 from methods.latent_mas import LatentMASMethod
@@ -42,11 +43,29 @@ def evaluate(preds: List[Dict]) -> Tuple[float, int]:
         
     Returns:
         Tuple of (accuracy, correct_count).
+        
+    Note:
+        For tasks without evaluation (e.g., cot_fact_wiki), 'correct' may be None.
+        In such cases, accuracy is reported as 0.0 and correct_count as 0.
     """
     total = len(preds)
-    correct = sum(1 for p in preds if p.get("correct", False))
-    acc = correct / total if total > 0 else 0.0
-    logger.debug(f"Evaluation: {correct}/{total} correct, accuracy: {acc:.4f}")
+    
+    # Count items that were actually evaluated (correct is not None)
+    evaluated = [p for p in preds if p.get("correct") is not None]
+    evaluated_count = len(evaluated)
+    
+    # Count correct predictions among evaluated items
+    correct = sum(1 for p in evaluated if p.get("correct", False))
+    
+    # Calculate accuracy based on evaluated items
+    if evaluated_count > 0:
+        acc = correct / evaluated_count
+        logger.debug(f"Evaluation: {correct}/{evaluated_count} correct (out of {total} total), accuracy: {acc:.4f}")
+    else:
+        # No items were evaluated (e.g., all cot_fact_wiki)
+        acc = 0.0
+        logger.debug(f"Evaluation: No items evaluated (0/{total} total), accuracy: N/A")
+    
     return acc, correct
 
 
@@ -353,9 +372,23 @@ def process_batch(
         logger.info("=" * 80)
         logger.info(f"COMPLETED PROBLEM #{problem_idx}")
         logger.info(f"  Question: {res.get('question', '')[:100]}...")
-        logger.info(f"  Prediction: {res.get('prediction')}")
+        
+        # For cot_fact_wiki, prediction is the raw output (can be long)
+        pred_text = res.get('prediction', '')
+        if len(pred_text) > 200:
+            logger.info(f"  Prediction: {pred_text[:200]}... (truncated, total length: {len(pred_text)} chars)")
+        else:
+            logger.info(f"  Prediction: {pred_text}")
+        
         logger.info(f"  Gold Answer: {res.get('gold')}")
-        logger.info(f"  Result: {'✓ CORRECT' if res.get('correct') else '✗ INCORRECT'}")
+        
+        # Handle None value for correct (e.g., cot_fact_wiki task)
+        correct_value = res.get('correct')
+        if correct_value is None:
+            logger.info(f"  Result: N/A (no evaluation for this task)")
+        else:
+            logger.info(f"  Result: {'✓ CORRECT' if correct_value else '✗ INCORRECT'}")
+        
         if 'num_paths_used' in res:
             logger.info(f"  Paths Used: {res.get('num_paths_used')}")
         logger.info("=" * 80)
@@ -368,7 +401,7 @@ def process_batch(
                 question=res.get('question', ''),
                 prediction=res.get('prediction'),
                 gold=res.get('gold'),
-                correct=res.get('correct', False),
+                correct=res.get('correct'),  # Can be None for tasks without evaluation
                 additional_info={
                     'method': args.method,
                     'model': args.model_name,
@@ -672,7 +705,7 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
         parser.add_argument("--model_name", type=str, required=True,
                             help="Model choices to use for experiments (e.g. 'Qwen/Qwen3-14B').")
         parser.add_argument("--max_samples", type=int, default=-1, help="Number of questions to evaluate; set -1 to use all samples.")
-        parser.add_argument("--task", choices=["gsm8k", "aime2024", "aime2025", "gpqa", "arc_easy", "arc_challenge", "mbppplus", 'humanevalplus', 'medqa'], default="gsm8k",
+        parser.add_argument("--task", choices=["gsm8k", "aime2024", "aime2025", "gpqa", "arc_easy", "arc_challenge", "mbppplus", 'humanevalplus', 'medqa', 'cot_fact_wiki'], default="gsm8k",
                             help="Dataset/task to evaluate. Controls which loader is used.")
         parser.add_argument("--prompt", type=str, choices=["sequential", "hierarchical"], default="sequential", help="Multi-agent system architecture: 'sequential' or 'hierarchical'.")
         parser.add_argument("--log_level", type=str, choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO",
@@ -1037,6 +1070,8 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
             dataset_iter = load_humanevalplus(split='test')
         elif args.task == "medqa":
             dataset_iter = load_medqa(split='test')
+        elif args.task == "cot_fact_wiki":
+            dataset_iter = load_cot_fact_wiki(split=args.split)
         else:
             raise ValueError(f'no {args.task} support')
 
@@ -1116,7 +1151,13 @@ def main(custom_questions: Optional[List[Dict]] = None, args: Optional[argparse.
     logger.info(f"Total processing time: {total_time:.2f} seconds")
 
     acc, correct = evaluate(preds)
-    logger.info(f"Final results: {correct}/{len(preds)} correct, accuracy: {acc:.4f}")
+    
+    # Check if this is a task without evaluation (e.g., cot_fact_wiki)
+    evaluated_count = sum(1 for p in preds if p.get("correct") is not None)
+    if evaluated_count == 0:
+        logger.info(f"Final results: {len(preds)} items processed (no evaluation performed for this task)")
+    else:
+        logger.info(f"Final results: {correct}/{evaluated_count} correct, accuracy: {acc:.4f}")
     
     # Load results in JSON format
     result_json = json.dumps(

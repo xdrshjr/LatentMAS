@@ -221,3 +221,82 @@ def load_medqa(split=None, subset=None, cache_dir=None):
             "gold": gold,
         }
 
+
+def load_cot_fact_wiki(split: str = "test", cache_dir: Optional[str] = None) -> Iterable[Dict]:
+    """Load CoT fact-checking dataset from local JSON file.
+    
+    The dataset contains fact-checking questions with chain-of-thought reasoning.
+    Format: [{"problem": "...", "solution": "...", "messages": [...]}]
+    
+    Args:
+        split: Dataset split (default: "test")
+        cache_dir: Optional cache directory (not used for local files)
+        
+    Yields:
+        Dict with keys: question, solution, gold
+    """
+    import json
+    import logging
+    import os
+    import re
+    
+    logger = logging.getLogger(__name__)
+    
+    # Construct the file path
+    data_file = "data/cot-fact-wiki/test-00000-of-00001.json"
+    
+    if not os.path.exists(data_file):
+        logger.error(f"CoT fact-checking dataset file not found: {data_file}")
+        raise FileNotFoundError(f"Dataset file not found: {data_file}")
+    
+    logger.info(f"Loading CoT fact-checking dataset from: {data_file}")
+    
+    # Load the JSON file
+    with open(data_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    logger.info(f"Loaded {len(data)} samples from CoT fact-checking dataset")
+    
+    # Helper function to extract answer from \boxed{...} format
+    def extract_boxed_answer(text: str) -> str:
+        """Extract answer from LaTeX \boxed{...} format.
+        
+        For fact-checking tasks, answers are typically text-based descriptions,
+        not just numbers. This function extracts the full content within \boxed{}.
+        """
+        # Find all \boxed{...} patterns
+        boxes = re.findall(r"\\boxed\{([^}]*)\}", text)
+        if boxes:
+            # Return the last boxed answer (final answer)
+            return boxes[-1].strip()
+        
+        # If no boxed answer found, return empty string
+        logger.debug(f"No boxed answer found in text: {text[:100]}...")
+        return ""
+    
+    # Process each item
+    for idx, item in enumerate(data):
+        # Extract problem (question) and solution
+        problem = item.get("problem", "").strip()
+        solution = item.get("solution", "").strip()
+        
+        if not problem:
+            logger.warning(f"Sample {idx} has empty problem field, skipping")
+            continue
+        
+        # For fact-checking tasks, we extract the answer from the solution
+        # The solution contains the full reasoning and the final answer in \boxed{...}
+        gold = extract_boxed_answer(solution) if solution else ""
+        
+        # Normalize the answer (lowercase and strip whitespace)
+        # Note: For fact-checking, we keep the full text answer, not just numbers
+        gold = normalize_answer(gold) if gold else ""
+        
+        logger.debug(f"Sample {idx}: question length={len(problem)}, "
+                    f"solution length={len(solution)}, gold length={len(gold) if gold else 0}")
+        
+        yield {
+            "question": problem,
+            "solution": solution,
+            "gold": gold,
+        }
