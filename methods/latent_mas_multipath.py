@@ -1988,8 +1988,22 @@ class LatentMASMultiPathMethod(LatentMASMethod):
         for idx, item in enumerate(items):
             final_text = final_texts[idx]
             
-            # Extract prediction based on task
-            if self.task in ['mbppplus', 'humanevalplus']:
+            # Special handling for cot_fact_wiki task: skip extraction and evaluation
+            if self.task == "cot_fact_wiki":
+                logger.info(f"[LatentMASMultiPathMethod.run_batch_vllm] Item {idx + 1}: Task is cot_fact_wiki, saving raw judger output directly")
+                logger.debug(f"[LatentMASMultiPathMethod.run_batch_vllm] Item {idx + 1}: Raw judger output length: {len(final_text)} characters")
+                
+                # For cot_fact_wiki, save the raw judger output directly without extraction
+                pred = final_text
+                gold = item.get("gold", "")
+                ok = None  # No evaluation for this task
+                error_msg = None
+                
+                logger.info(f"[LatentMASMultiPathMethod.run_batch_vllm] Item {idx + 1}: Skipping answer extraction and correctness checking for cot_fact_wiki task")
+                logger.debug(f"[LatentMASMultiPathMethod.run_batch_vllm] Item {idx + 1}: Raw output preview: {final_text[:200]}...")
+            
+            # Extract prediction based on task for other tasks
+            elif self.task in ['mbppplus', 'humanevalplus']:
                 pred = extract_markdown_python_block(final_text)
                 gold = item.get("gold", "")
                 
@@ -2018,26 +2032,6 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                 
                 logger.info(f'[LatentMASMultiPathMethod.run_batch_vllm] Item {idx}: correct={ok}, pred={pred}, gold={gold}')
             
-            elif self.task == "cot_fact_wiki":
-                # Fact-checking task: extract answer from \boxed{...} format
-                # Answers are text-based descriptions, not just numbers
-                import re
-                boxes = re.findall(r"\\boxed\{([^}]*)\}", final_text)
-                if boxes:
-                    pred = normalize_answer(boxes[-1].strip())
-                else:
-                    # Fallback: try to extract using gsm8k method
-                    pred = normalize_answer(extract_gsm8k_answer(final_text))
-                
-                gold = item.get("gold", "")
-                # For text-based answers, check if key phrases match
-                # Use normalized comparison
-                ok = (pred == gold) if (pred and gold) else False
-                error_msg = None
-                
-                logger.info(f'[LatentMASMultiPathMethod.run_batch_vllm] Item {idx}: correct={ok}, pred={pred[:100]}..., gold={gold[:100]}...')
-                logger.debug(f"Fact-checking evaluation: pred='{pred}', gold='{gold}', match={ok}")
-            
             else:
                 pred = normalize_answer(extract_gsm8k_answer(final_text))
                 gold = item.get("gold", "")
@@ -2057,7 +2051,13 @@ class LatentMASMultiPathMethod(LatentMASMethod):
                 "num_paths_used": len(batch_paths[idx]) if batch_paths[idx] else 0,
             })
         
-        logger.info(f"Batch complete: accuracy={sum(r['correct'] for r in results)}/{len(results)} [vLLM]")
+        # Calculate accuracy, handling None values for cot_fact_wiki task
+        if self.task == "cot_fact_wiki":
+            logger.info(f"Batch complete: {len(results)} items processed (no evaluation for cot_fact_wiki task) [vLLM]")
+        else:
+            correct_count = sum(1 for r in results if r['correct'])
+            evaluated_count = sum(1 for r in results if r['correct'] is not None)
+            logger.info(f"Batch complete: accuracy={correct_count}/{evaluated_count} [vLLM]")
         
         # Clean up all paths from this batch to free GPU memory
         logger.info("=" * 80)

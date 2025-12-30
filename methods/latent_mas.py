@@ -204,7 +204,22 @@ class LatentMASMethod:
         results: List[Dict] = []
         for idx, item in enumerate(items):
             final_text = final_texts[idx]
-            if self.task in ['mbppplus', 'humanevalplus']:
+            
+            # Special handling for cot_fact_wiki task: skip extraction and evaluation
+            if self.task == "cot_fact_wiki":
+                logger.info(f"Item {idx + 1}: Task is cot_fact_wiki, saving raw judger output directly")
+                logger.debug(f"Item {idx + 1}: Raw judger output length: {len(final_text)} characters")
+                
+                # For cot_fact_wiki, save the raw judger output directly without extraction
+                pred = final_text
+                gold = item.get("gold", "")
+                ok = None  # No evaluation for this task
+                error_msg = None
+                
+                logger.info(f"Item {idx + 1}: Skipping answer extraction and correctness checking for cot_fact_wiki task")
+                logger.debug(f"Item {idx + 1}: Raw output preview: {final_text[:200]}...")
+            
+            elif self.task in ['mbppplus', 'humanevalplus']:
                 pred = extract_markdown_python_block(final_text)
                 gold = item.get("gold", "")
 
@@ -231,25 +246,6 @@ class LatentMASMethod:
                 except ValueError:
                     ok = False
                     error_msg = f'Value error in parsing answer. Pred: {pred}, Gold: {gold}'
-
-            elif self.task == "cot_fact_wiki":
-                # Fact-checking task: extract answer from \boxed{...} format
-                # Answers are text-based descriptions, not just numbers
-                import re
-                boxes = re.findall(r"\\boxed\{([^}]*)\}", final_text)
-                if boxes:
-                    pred = normalize_answer(boxes[-1].strip())
-                else:
-                    # Fallback: try to extract using gsm8k method
-                    pred = normalize_answer(extract_gsm8k_answer(final_text))
-                
-                gold = item.get("gold", "")
-                # For text-based answers, check if key phrases match
-                # Use normalized comparison
-                ok = (pred == gold) if (pred and gold) else False
-                error_msg = None
-                
-                logger.debug(f"Fact-checking evaluation: pred='{pred[:100]}...', gold='{gold[:100]}...', match={ok}")
 
             else:
                 pred = normalize_answer(extract_gsm8k_answer(final_text))
@@ -465,9 +461,58 @@ class LatentMASMethod:
         results: List[Dict] = []
         for idx, item in enumerate(items):
             final_text = final_texts[idx]
-            pred = normalize_answer(extract_gsm8k_answer(final_text))
-            gold = item["gold"]
-            ok = (pred == gold) if (pred and gold) else False
+            
+            # Special handling for cot_fact_wiki task: skip extraction and evaluation
+            if self.task == "cot_fact_wiki":
+                logger.info(f"[LatentMAS][vLLM] Item {idx + 1}: Task is cot_fact_wiki, saving raw judger output directly")
+                logger.debug(f"[LatentMAS][vLLM] Item {idx + 1}: Raw judger output length: {len(final_text)} characters")
+                
+                # For cot_fact_wiki, save the raw judger output directly without extraction
+                pred = final_text
+                gold = item.get("gold", "")
+                ok = None  # No evaluation for this task
+                
+                logger.info(f"[LatentMAS][vLLM] Item {idx + 1}: Skipping answer extraction and correctness checking for cot_fact_wiki task")
+                logger.debug(f"[LatentMAS][vLLM] Item {idx + 1}: Raw output preview: {final_text[:200]}...")
+            
+            elif self.task in ['mbppplus', 'humanevalplus']:
+                pred = extract_markdown_python_block(final_text)
+                gold = item.get("gold", "")
+
+                if pred is None:
+                    ok = False
+                    error_msg = "python error: No python code block found"
+                else:
+                    python_code_to_exe = pred + "\n" + gold
+                    ok, error_msg = run_with_timeout(python_code_to_exe, timeout=10)
+                
+                logger.info(f'[LatentMAS][vLLM] Item {idx + 1}: Evaluation result: {"CORRECT" if ok else "INCORRECT"}')
+                if error_msg:
+                    logger.debug(f'[LatentMAS][vLLM] Item {idx + 1}: Error: {error_msg}')
+
+            elif self.task in ["aime2024", "aime2025"]:
+                pred = normalize_answer(extract_gsm8k_answer(final_text))
+                gold = str(item.get("gold", "")).strip()
+                try:
+                    pred_int = int(pred)
+                    gold_int = int(gold)
+                    ok = (pred_int == gold_int)
+                    error_msg = None
+                except ValueError:
+                    ok = False
+                    error_msg = f'Value error in parsing answer. Pred: {pred}, Gold: {gold}'
+                
+                logger.info(f'[LatentMAS][vLLM] Item {idx + 1}: Evaluation result: {"CORRECT" if ok else "INCORRECT"} (pred={pred}, gold={gold})')
+                if error_msg:
+                    logger.debug(f'[LatentMAS][vLLM] Item {idx + 1}: {error_msg}')
+            
+            else:
+                pred = normalize_answer(extract_gsm8k_answer(final_text))
+                gold = item.get("gold", "")
+                ok = (pred == gold) if (pred and gold) else False
+                
+                logger.info(f'[LatentMAS][vLLM] Item {idx + 1}: Evaluation result: {"CORRECT" if ok else "INCORRECT"} (pred={pred}, gold={gold})')
+            
             results.append(
                 {
                     "question": item["question"],

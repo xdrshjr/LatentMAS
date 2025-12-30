@@ -13,7 +13,7 @@ PYTHONUNBUFFERED=1;CUDA_VISIBLE_DEVICES=1;https_proxy=http://127.0.0.1:7897;http
 
 
 ```shell
-# inference 
+# inference 1
 python run.py
 --method latent_mas
 --model_name Qwen/Qwen3-4B

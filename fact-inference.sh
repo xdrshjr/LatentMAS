@@ -16,7 +16,7 @@
 #MODEL_NAME="/autodl-fs/data/models/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
 
 # ==================================Local Compute==================================
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 export https_proxy=http://127.0.0.1:7897
 export http_proxy=http://127.0.0.1:7897
 export all_proxy=socks5://127.0.0.1:7897
@@ -25,7 +25,7 @@ MODEL_NAME="/home/xdrshjr/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapsh
 
 # ==================================Configuration Parameters==================================
 # Number of samples to process from the dataset (-1 for all samples)
-MAX_SAMPLES=5
+MAX_SAMPLES=-1
 
 # Output directories (automatically created by the Python script)
 # - Question-answer records: output/res/
@@ -45,16 +45,16 @@ METHOD="latent_mas_multipath"
 
 # Generation parameters
 MAX_NEW_TOKENS=2048
-TEMPERATURE=0.3
+TEMPERATURE=0.6
 TOP_P=0.95
 GENERATE_BS=1
 SEED=42
 
 # Latent reasoning parameters (for latent_mas and latent_mas_multipath)
-LATENT_STEPS=10
+LATENT_STEPS=5
 
 # Multi-path parameters (for latent_mas_multipath only)
-NUM_PATHS=30
+NUM_PATHS=20
 NUM_PARENT_PATHS=10
 DIVERSITY_STRATEGY="temperature"
 PRUNING_STRATEGY="adaptive"
